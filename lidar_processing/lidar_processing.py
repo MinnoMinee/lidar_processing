@@ -14,7 +14,7 @@ from scipy.interpolate      import interp1d
 
 class lidar_processor:
     def __init__(self, file_path, DBSCAN_model_path = None, window_size = 10, upsample_ratio = 2, name=None,  
-                strong_edge_threshold = 80, weak_edge_threshold = 30, strong_PCA_threshold = 0.01, weak_PCA_threshold = 0.0075):
+                strong_edge_threshold = 80, weak_edge_threshold = 30, strong_PCA_threshold = 0.01, weak_PCA_threshold = 0.0075, colourmap = 'binary'):
         if DBSCAN_model_path is None:
             current_dir = os.getcwd()
             self.DBSCAN_model_path = os.path.join(current_dir, 'cluster_kd_tree.pkl')
@@ -22,6 +22,7 @@ class lidar_processor:
             self.DBSCAN_model_path = DBSCAN_model_path
             
         self.file_path = file_path
+        self.colourmap = colourmap
         self.name = name if name else file_path
         self.upsample_ratio = upsample_ratio
         self.window_size = window_size
@@ -482,7 +483,11 @@ class lidar_processor:
 
         self.edge_array = np.where(result_array ==  1, 1 , np.nan)
 
-    def _define_sections(self, noise_threshold = 7):
+    def _define_sections(self, noise_threshold = 7,**kwargs):
+        for key, value in kwargs.items():
+            if value is not None and hasattr(self, key):
+                setattr(self, key, value)
+
         self._create_edge_array()
         self._load_DBSCAN_model()
         convolved_point_cloud = convolve(self.point_cloud,np.array([[-1],[-2],[0],[2],[1]]))
@@ -540,7 +545,10 @@ class lidar_processor:
                 for x in center_x_vals:
                     self.labeled_x_values[x] = closest_label
 
-    def _classify_rubble(self, x_window=1, y_window=4):
+    def _classify_rubble(self, x_window=1, y_window=4,**kwargs):
+        for key, value in kwargs.items():
+            if value is not None and hasattr(self, key):
+                setattr(self, key, value)
 
         x_window = x_window * self.upsample_ratio
 
@@ -674,7 +682,7 @@ class lidar_processor:
             display = self.point_cloud
         else:
             display = self.intensity_cloud
-        ax.imshow(np.flipud(display), cmap='bone_r', interpolation='nearest', alpha=1, aspect='auto')
+        ax.imshow(np.flipud(display), cmap=self.colourmap, interpolation='nearest', alpha=1, aspect= 'auto')
 
         for (x_start, x_end), values in self.correction_windows.items():
             half_perc, empty_perc, full_perc, rubble_perc = values[:4]
@@ -722,7 +730,7 @@ class lidar_processor:
 
         plt.show()
 
-    def _plot_gradient(self,width = 150, height = 5, dpi = 75):
+    def _plot_gradient(self,width = 150, height = 7, dpi = 75):
         if self.gradient is None:
             self._get_gradient()
         fig, ax = plt.subplots(figsize=(width, height), dpi=dpi)
@@ -731,7 +739,7 @@ class lidar_processor:
         ax.set_ylabel("Y index",fontsize = 20)
         ax.set_title(self.name, fontsize=35)
 
-    def _plot_PCA_mask(self,plot_point_cloud = False, plot_intensity_cloud = True, width = 150, height = 3, dpi = 75, colourmap = 'cool', **kwargs):
+    def _plot_PCA_mask(self,plot_point_cloud = False, plot_intensity_cloud = True, width = 150, height = 7, dpi = 75, colourmap = 'cool', **kwargs):
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
                 setattr(self, key, value)
@@ -741,17 +749,17 @@ class lidar_processor:
         fig, ax = plt.subplots(figsize=(width, height), dpi=dpi)
         a = 1
         if plot_intensity_cloud:
-            ax.imshow(cp.flipud(self.intensity_cloud), cmap="bone_r", interpolation='nearest', alpha = 1)
-            a = 0.8
+            ax.imshow(cp.flipud(self.intensity_cloud), cmap=self.colourmap, interpolation='nearest', alpha = 1, aspect = 'auto')
+            a = 0.25
         if plot_point_cloud:
-            ax.imshow(cp.flipud(self.point_cloud), cmap="bone_r", interpolation='nearest', alpha = 1)
-            a = 0.8
-        ax.imshow(cp.flipud(self.PCA_mask), cmap="binary", interpolation='nearest', alpha = a)
+            ax.imshow(cp.flipud(self.point_cloud), cmap=self.colourmap, interpolation='nearest', alpha = 1, aspect = 'auto')
+            a = 0.25
+        ax.imshow(cp.flipud(self.PCA_mask), cmap=self.colourmap, interpolation='nearest', alpha = a, aspect = 'auto')
         ax.set_xlabel("X index")
         ax.set_ylabel("Y index")
         ax.set_title(self.name)
 
-    def _plot_sections(self,plot_point_cloud = False, plot_intensity_cloud = True, width = 150, height = 3, dpi = 75, colourmap = 'cool', **kwargs):
+    def _plot_sections(self,plot_point_cloud = False, plot_intensity_cloud = True, width = 150, height = 7, dpi = 75, **kwargs):
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
                 setattr(self, key, value)
@@ -784,12 +792,12 @@ class lidar_processor:
         fig, ax = plt.subplots(figsize=(width, height), dpi=dpi)
         a = 1
         if plot_intensity_cloud:
-            ax.imshow(cp.flipud(self.intensity_cloud), cmap="bone_r", interpolation='nearest', alpha = 1, aspect= self.upsample_ratio)
+            ax.imshow(cp.flipud(self.intensity_cloud), cmap=self.colourmap, interpolation='nearest', alpha = 1, aspect= 'auto')
             a = 0.8
         if plot_point_cloud:
-            ax.imshow(cp.flipud(self.point_cloud), cmap="bone_r", interpolation='nearest', alpha = 1, aspect= self.upsample_ratio)
+            ax.imshow(cp.flipud(self.point_cloud), cmap=self.colourmap, interpolation='nearest', alpha = 1, aspect= 'auto')
             a = 0.8
-        ax.imshow(cp.flipud(edges), cmap=colourmap, interpolation='nearest', alpha = a, aspect= self.upsample_ratio)
+        ax.imshow(cp.flipud(edges), cmap='cool', interpolation='nearest', alpha = a, aspect= 'auto')
         ax.set_xlabel("X index")
         ax.set_ylabel("Y index")
         ax.set_title(self.name)
@@ -812,16 +820,24 @@ class lidar_processor:
         
         o3d.visualization.draw_geometries([pcd])
 
-    def _plot_point_cloud(self,width = 150, height = 3, dpi = 75, colourmap = 'bone_r'):
+    def _plot_point_cloud(self,width = 150, height = 7, dpi = 75, **kwargs):
+        for key, value in kwargs.items():
+            if value is not None and hasattr(self, key):
+                setattr(self, key, value)
+
         fig, ax = plt.subplots(figsize=(width, height), dpi=dpi)
-        ax.imshow(cp.flipud(self.point_cloud), cmap=colourmap, interpolation='nearest', alpha = 1)
+        ax.imshow(cp.flipud(self.point_cloud), cmap=self.colourmap, interpolation='nearest', alpha = 1, aspect = 'auto')
         ax.set_xlabel("X index")
         ax.set_ylabel("Y index")
         ax.set_title(self.name)
 
-    def _plot_intensity_cloud(self,width = 150, height = 3, dpi = 75, colourmap = 'bone_r'):
+    def _plot_intensity_cloud(self,width = 150, height = 7, dpi = 75, **kwargs):
+        for key, value in kwargs.items():
+            if value is not None and hasattr(self, key):
+                setattr(self, key, value)
+
         fig, ax = plt.subplots(figsize=(width, height), dpi=dpi)
-        ax.imshow(cp.flipud(self.intensity_cloud), cmap=colourmap, interpolation='nearest', alpha = 1)
+        ax.imshow(cp.flipud(self.intensity_cloud), cmap=self.colourmap, interpolation='nearest', alpha = 1, aspect = 'auto')
         ax.set_xlabel("X index")
         ax.set_ylabel("Y index")
         ax.set_title(self.name)
