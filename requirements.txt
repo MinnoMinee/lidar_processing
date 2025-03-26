@@ -1,0 +1,7 @@
+numpy
+cupy-cuda12x  # Adjust if you have a different CUDA version
+scipy
+matplotlib
+opencv-python
+open3d
+
