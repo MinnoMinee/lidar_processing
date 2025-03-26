@@ -16,7 +16,8 @@ class lidar_processor:
     def __init__(self, file_path, DBSCAN_model_path = None, window_size = 10, upsample_ratio = 2, name=None,  
                 strong_edge_threshold = 80, weak_edge_threshold = 30, strong_PCA_threshold = 0.01, weak_PCA_threshold = 0.0075):
         if DBSCAN_model_path is None:
-            self.DBSCAN_model_path = os.path.join(os.path.dirname(__file__), 'cluster_kd_tree.pkl')
+            current_dir = os.getcwd()
+            self.DBSCAN_model_path = os.path.join(current_dir, 'cluster_kd_tree.pkl')
         else: 
             self.DBSCAN_model_path = DBSCAN_model_path
             
@@ -374,7 +375,6 @@ class lidar_processor:
 
         if self.upsample_ratio > 1:
             index_step = (np.nanmedian(np.diff(x_values))) / self.upsample_ratio 
-            global index_steps
             index_steps = np.arange(int(round(np.nanmin(x_values)))/index_step - 1,int(round((np.nanmax(x_values))/index_step)+1)) * index_step
             x_range = len(index_steps)
             known_indices = np.unique([np.argmin(np.abs(index_steps - x)) for x in x_values])
@@ -595,7 +595,6 @@ class lidar_processor:
 
         windows = {}
 
-
         for x_start in range(0, round(np.nanmax(self.i_to_x_list)), xrf_window_size):
             values = [self.rubble_classifications[i] for i, x in zip(self.i_to_x_list, self.i_to_x_list) 
             if x_start <= x < x_start + xrf_window_size]
@@ -645,8 +644,13 @@ class lidar_processor:
             if value is not None and hasattr(self, key):
                 setattr(self, key, value)
 
-        if self.correction_windows is None or xrf_window_size is not None:
-            self._define_correction_windows(xrf_window_size = xrf_window_size)
+        if  xrf_window_size is not None:
+            self._define_correction_windows(xrf_window_size)
+
+        if self.correction_windows is None:
+            self._define_correction_windows()
+
+
         fig, ax = plt.subplots(figsize=(width, height), dpi=dpi)
 
         colormap = ["green", "blue", "purple", "red"]
