@@ -1,6 +1,0 @@
-numpy
-cupy-cuda12x
-scipy
-matplotlib
-opencv-python
-open3d
