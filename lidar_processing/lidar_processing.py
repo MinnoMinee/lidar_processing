@@ -539,8 +539,8 @@ class lidar_processor:
                 if not np.any(np.isnan(v)):  
                     dist, ind = self.tree.query([v], k=1)  
 
-                    if dist[0][0] <= noise_threshold: 
-                        closest_label = self.labels[ind[0][0]] 
+                    if dist[0] <= noise_threshold: 
+                        closest_label = self.labels[ind[0]] 
                         
                         if closest_label == 2:
                             closest_label += b
