@@ -4,4 +4,5 @@ scipy
 matplotlib
 opencv-python
 open3d
+scikit-learn version == 1.0.2
 

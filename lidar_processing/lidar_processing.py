@@ -10,6 +10,8 @@ from scipy.ndimage          import convolve
 from cupyx.scipy.ndimage    import convolve as cpconvolve
 from collections            import deque
 from scipy.interpolate      import interp1d
+from scipy.spatial import KDTree
+
 
 
 class lidar_processor:
@@ -734,7 +736,7 @@ class lidar_processor:
         if self.gradient is None:
             self._get_gradient()
         fig, ax = plt.subplots(figsize=(width, height), dpi=dpi)
-        ax.imshow(cp.flipud(self.gradient), cmap='nipy_spectral', interpolation='nearest', alpha = 1)
+        ax.imshow(cp.flipud(self.gradient), cmap='nipy_spectral', interpolation='nearest', alpha = 1, aspect = 'auto')
         ax.set_xlabel("X index",fontsize = 20)
         ax.set_ylabel("Y index",fontsize = 20)
         ax.set_title(self.name, fontsize=35)
@@ -766,28 +768,28 @@ class lidar_processor:
 
         if self.edge_array is None:
             self._create_edge_array()
-        edges = self.edge_array.copy()
+        sections = self.edge_array.copy()
     
         neighbours = [(-1, 0), (0, -1), (0, 1), (1, 0)]  
-        nan_mask = np.isnan(edges)  
+        nan_mask = np.isnan(sections)  
 
-        int = 2
-        for x in range(edges.shape[1]):
+        int = 1
+        for x in range(sections.shape[1]):
             if nan_mask[self.y_seed_point, x]: 
                 queue = deque([(self.y_seed_point, x)])
                 while queue:
                     y, x = queue.popleft()
-                    edges[y, x] = int 
+                    sections[y, x] = int 
                     nan_mask[y, x] = False  
                     neighbors_to_add = [(ny, nx) for dy, dx in neighbours
-                        if (0 <= (ny := y + dy) < edges.shape[0] and 
-                            0 <= (nx := x + dx) < edges.shape[1] and nan_mask[ny, nx])]
+                        if (0 <= (ny := y + dy) < sections.shape[0] and 
+                            0 <= (nx := x + dx) < sections.shape[1] and nan_mask[ny, nx])]
                     queue.extend(neighbors_to_add) 
                     for ny, nx in neighbors_to_add:
                         nan_mask[ny, nx] = False 
             int += 1
         
-        edges = np.where(edges > 1, edges, np.nan)
+        sections = np.where(sections > 0, sections, np.nan)
 
         fig, ax = plt.subplots(figsize=(width, height), dpi=dpi)
         a = 1
@@ -797,7 +799,7 @@ class lidar_processor:
         if plot_point_cloud:
             ax.imshow(cp.flipud(self.point_cloud), cmap=self.colourmap, interpolation='nearest', alpha = 1, aspect= 'auto')
             a = 0.8
-        ax.imshow(cp.flipud(edges), cmap='cool', interpolation='nearest', alpha = a, aspect= 'auto')
+        ax.imshow(cp.flipud(sections), cmap='cool', interpolation='nearest', alpha = a, aspect= 'auto')
         ax.set_xlabel("X index")
         ax.set_ylabel("Y index")
         ax.set_title(self.name)
