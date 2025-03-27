@@ -773,7 +773,7 @@ class lidar_processor:
         neighbours = [(-1, 0), (0, -1), (0, 1), (1, 0)]  
         nan_mask = np.isnan(sections)  
 
-        int = 1
+        int = 2
         for x in range(sections.shape[1]):
             if nan_mask[self.y_seed_point, x]: 
                 queue = deque([(self.y_seed_point, x)])
@@ -789,7 +789,7 @@ class lidar_processor:
                         nan_mask[ny, nx] = False 
             int += 1
         
-        sections = np.where(sections > 0, sections, np.nan)
+        sections = np.where(sections > 1, sections, np.nan)
 
         fig, ax = plt.subplots(figsize=(width, height), dpi=dpi)
         a = 1
