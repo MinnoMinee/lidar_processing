@@ -716,16 +716,6 @@ class lidar_processor:
                 ax.bar(self.x_to_i_dict[x_start], height=extra_heights, width=width,
                     bottom=extra_heights*2, color=color3, alpha=0.75, align='edge')
 
-        sm1 = plt.cm.ScalarMappable(cmap=cmap1, norm=plt.Normalize(vmin=min_var, vmax=max_var))
-        sm2 = plt.cm.ScalarMappable(cmap=cmap2, norm=plt.Normalize(vmin=min_angle, vmax=max_angle))
-        
-        cbar1 = ax.figure.colorbar(sm1, ax=ax, orientation='vertical', fraction=0.003,shrink = 1, aspect=10, pad = 0.01)
-        cbar2 = ax.figure.colorbar(sm2, ax=ax, orientation='vertical', fraction=0.003,shrink = 1, aspect=10, pad = 0)
-
-        
-        cbar1.set_label("Variance",fontsize = 20)
-        cbar2.set_label("X Angle & Y Angle",fontsize = 20) 
-
         ax.set_xlabel("X index",fontsize = 20)
         ax.set_ylabel("Y index",fontsize = 20)
         ax.set_title(self.name, fontsize=35)
@@ -843,3 +833,29 @@ class lidar_processor:
         ax.set_xlabel("X index")
         ax.set_ylabel("Y index")
         ax.set_title(self.name)
+
+    def _get_data_cube(self,intensity = False):
+        x = (list)(self.i_to_x_list) * len(self.i_to_y_list)
+        y = np.repeat(self.i_to_y_list, len(self.i_to_x_list))
+        if intensity:
+            z = self.intensity_cloud.flatten()
+        else:
+            z = self.point_cloud.flatten()
+
+        return np.column_stack((x, y, z))
+
+    def _save_to_csv(self,intensity = False):
+        x = (list)(self.i_to_x_list) * len(self.i_to_y_list)
+        y = np.repeat(self.i_to_y_list, len(self.i_to_x_list))
+        if intensity:
+            z = self.intensity_cloud.flatten()
+        else:
+            z = self.point_cloud.flatten()
+    
+        data_cube = np.column_stack((x, y, z))
+
+        file_path = os.path.join(self.file_path, "point_cloud.csv")
+        
+        np.savetxt(file_path, data_cube, fmt="%.6f", delimiter=",", header="X,Y,Z", comments="")
+
+
