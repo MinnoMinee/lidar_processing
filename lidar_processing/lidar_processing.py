@@ -15,7 +15,7 @@ from scipy.spatial import KDTree
 
 
 class lidar_processor:
-    def __init__(self, file_path, DBSCAN_model_path = None, window_size = 10, upsample_ratio = 2, name=None,  
+    def __init__(self, file_path, DBSCAN_model_path = None, window_size = 10, upsample_ratio = 2, y_shift = 0, name=None,  
                 strong_edge_threshold = 80, weak_edge_threshold = 30, strong_PCA_threshold = 0.01, weak_PCA_threshold = 0.0075, colourmap = 'binary'):
         if DBSCAN_model_path is None:
             current_dir = os.getcwd()
@@ -32,6 +32,7 @@ class lidar_processor:
         self.weak_edge_threshold = weak_edge_threshold
         self.strong_PCA_threshold = strong_PCA_threshold
         self.weak_PCA_threshold = weak_PCA_threshold
+        self.y_shift = y_shift
         self.tree = None
         self.labels = None
 
@@ -362,15 +363,17 @@ class lidar_processor:
         self._load_component_parameters()
         self._load_lidar_data()
         self._interpolate_x_positions()
+
+
         
-        mask = (self.point_cloud[:,0] <= self.x_start) & (self.point_cloud[:,0] >= self.x_stop) & ((np.abs(self.point_cloud[:,1])) <= (self.window_size + 5))
+        mask = (self.point_cloud[:,0] <= self.x_start) & (self.point_cloud[:,0] >= self.x_stop) & ((self.point_cloud[:,1]) <= (self.window_size + 5 + self.y_shift)) & ((self.point_cloud[:,1]) >=  -(self.window_size + 5 - self.y_shift))
         self.point_cloud = self.point_cloud[mask]
         self.intensity_cloud = self.intensity_cloud[mask]
+        self.point_cloud[:,1] -= self.y_shift
+        self.intensity_cloud[:,1] -= self.y_shift
 
         min_intensity = np.nanmax(self.intensity_cloud[:,2])
         min_z = np.nanmax(self.point_cloud[:,2])
-        
-        minimum_x = self.point_cloud[np.argmin(np.abs(self.point_cloud[:,0] - self.x_stop)),0]
 
         x_values = np.unique(self.point_cloud[:,0])
         y_values = np.unique(self.point_cloud[:,1]) 
@@ -857,5 +860,3 @@ class lidar_processor:
         file_path = os.path.join(self.file_path, "point_cloud.csv")
         
         np.savetxt(file_path, data_cube, fmt="%.6f", delimiter=",", header="X,Y,Z", comments="")
-
-
