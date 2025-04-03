@@ -11,6 +11,7 @@ from cupyx.scipy.ndimage    import convolve as cpconvolve
 from collections            import deque
 from scipy.interpolate      import interp1d
 from scipy.spatial import KDTree
+import laspy
 
 
 
@@ -862,6 +863,7 @@ class lidar_processor:
         np.savetxt(file_path, data_cube, fmt="%.6f", delimiter=",", header="X,Y,Z", comments="")
 
 class ljx_processor:
+   class ljx_processor:
     def __init__(self, file_path, DBSCAN_model_path = None, window_size = 10, y_shift = 0, name=None,  
                 strong_edge_threshold = 80, weak_edge_threshold = 30, strong_PCA_threshold = 0.01, weak_PCA_threshold = 0.0075, colourmap = 'binary'):
         if DBSCAN_model_path is None:
@@ -960,9 +962,9 @@ class ljx_processor:
     def _load_lidar_data(self):
         if self.lidar2xrf_path is None:
             self.transformation_matrix = np.array([[1,0,0,192],
-                                                [0,-1,0,9.3],
-                                                [0,0,-1,53.8],
-                                                [0,0,0,1]])
+                                                  [0,-1,0,9.3],
+                                                  [0,0,-1,53.8],
+                                                  [0,0,0,1]])
         else: 
             with open(self.lidar2xrf_path) as file:
                 lines = file.readlines()
@@ -971,14 +973,14 @@ class ljx_processor:
         self.point_cloud = np.fromfile(self.bpc_path, dtype=np.float32).reshape(-1, 3)
     
         self.original_cloud_limits = [np.nanmax(self.point_cloud[:,0]),np.nanmin(self.point_cloud[:,0]), len(np.unique(self.point_cloud[:,0])),
-                                    np.nanmax(self.point_cloud[:,1]),np.nanmin(self.point_cloud[:,1]), len(np.unique(self.point_cloud[:,1])),
-                                    np.nanmax(self.point_cloud[:,2]),np.nanmin(self.point_cloud[:,2]), len(self.point_cloud[:,2])]
+                                      np.nanmax(self.point_cloud[:,1]),np.nanmin(self.point_cloud[:,1]), len(np.unique(self.point_cloud[:,1])),
+                                      np.nanmax(self.point_cloud[:,2]),np.nanmin(self.point_cloud[:,2]), len(self.point_cloud[:,2])]
 
         self.point_cloud = (np.hstack((self.point_cloud, np.ones((self.point_cloud.shape[0], 1)))) @ self.transformation_matrix.T)[:,:3]
 
         self.translated_cloud_limits = [np.nanmax(self.point_cloud[:,0]),np.nanmin(self.point_cloud[:,0]), len(np.unique(self.point_cloud[:,0])),
-                                    np.nanmax(self.point_cloud[:,1]),np.nanmin(self.point_cloud[:,1]), len(np.unique(self.point_cloud[:,1])),
-                                    np.nanmax(self.point_cloud[:,2]),np.nanmin(self.point_cloud[:,2]), len(self.point_cloud[:,2])]
+                                      np.nanmax(self.point_cloud[:,1]),np.nanmin(self.point_cloud[:,1]), len(np.unique(self.point_cloud[:,1])),
+                                      np.nanmax(self.point_cloud[:,2]),np.nanmin(self.point_cloud[:,2]), len(self.point_cloud[:,2])]
     
     def _get_gradient(self):
         array_z = cp.array(self.point_cloud, dtype=cp.float32)
@@ -1307,9 +1309,9 @@ class ljx_processor:
         results = {self.i_to_x_list[i]: self.labeled_x_values[i] if self.labeled_x_values[i] != 0 else [float(eigvals[i]),float(x_offset[i]),float(y_offset[i])] for i in range(len(self.i_to_x_list))}
 
         cp.get_default_memory_pool().free_all_blocks()
-
+ 
         self.rubble_classifications = results
-
+   
     def _define_correction_windows(self, xrf_window_size=10,noise_threshold = 1, **kwargs):
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
@@ -1565,6 +1567,22 @@ class ljx_processor:
 
         return np.column_stack((x, y, z))
 
+    def _save_to_las(self):
+        x = (list)(self.i_to_x_list) * len(self.i_to_y_list)
+        y = np.repeat(self.i_to_y_list, len(self.i_to_x_list))
+        z = self.point_cloud.flatten()
+
+        file_path = os.path.join(self.file_path, "point_cloud.las")
+
+        header = laspy.LasHeader(point_format=1, version="1.2") 
+        las = laspy.LasData(header)
+
+        las.x = np.array(x)
+        las.y = np.array(y)
+        las.z = np.array(z)
+
+        las.write(file_path)
+
     def _print_scan_limits(self, translated = False):
         if translated:
             data = self.translated_cloud_limits
@@ -1576,4 +1594,5 @@ class ljx_processor:
         print(f" x value range: {data[0]}mm to {data[1]}mm, number of lines in the x direction: {data[2]}")
         print(f" y value range: {data[3]}mm to {data[4]}mm, number of lines in the y direction: {data[5]}")
         print(f" z value range: {data[6]}mm to {data[7]}mm, total number of points: {data[8]}")
+
 
