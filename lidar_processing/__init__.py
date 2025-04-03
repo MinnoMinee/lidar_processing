@@ -1,2 +1,1 @@
-from .lidar_processing import lidar_processor
-from .lidar_processing import ljx_processor
+from .lidar_processing import lidar_processor, ljx_processor
