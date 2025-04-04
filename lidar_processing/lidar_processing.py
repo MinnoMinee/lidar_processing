@@ -1,6 +1,7 @@
 import os
 import cv2
 import pickle
+import laspy
 import matplotlib.pyplot    as plt
 import numpy                as np
 import cupy                 as cp
@@ -11,7 +12,6 @@ from cupyx.scipy.ndimage    import convolve as cpconvolve
 from collections            import deque
 from scipy.interpolate      import interp1d
 from scipy.spatial import KDTree
-import laspy
 
 
 
@@ -863,9 +863,10 @@ class lidar_processor:
         np.savetxt(file_path, data_cube, fmt="%.6f", delimiter=",", header="X,Y,Z", comments="")
 
 class ljx_processor:
-   class ljx_processor:
     def __init__(self, file_path, DBSCAN_model_path = None, window_size = 10, y_shift = 0, name=None,  
-                strong_edge_threshold = 80, weak_edge_threshold = 30, strong_PCA_threshold = 0.01, weak_PCA_threshold = 0.0075, colourmap = 'binary'):
+                strong_edge_threshold = 80, weak_edge_threshold = 30, strong_PCA_threshold = 0.01, weak_PCA_threshold = 0.0075, 
+                colourmap = 'binary', x_stop = 0 , box_length = 1500):
+        
         if DBSCAN_model_path is None:
             current_dir = os.getcwd()
             self.DBSCAN_model_path = os.path.join(current_dir, 'cluster_kd_tree.pkl')
@@ -881,6 +882,8 @@ class ljx_processor:
         self.strong_PCA_threshold = strong_PCA_threshold
         self.weak_PCA_threshold = weak_PCA_threshold
         self.y_shift = y_shift
+        self.box_length = box_length
+        self.x_stop = x_stop
         self.tree = None
         self.labels = None
 
@@ -890,10 +893,7 @@ class ljx_processor:
         self.edge_array = None
         self.gradient = None
         self.PCA_mask = None
-        self.x_start = None
-        self.x_stop = None
         self.y_seed_point = None
-        self.y_offset = None
         self.vectors = []
 
         
@@ -945,8 +945,8 @@ class ljx_processor:
             print (f"   Missing: {', '.join(non_essential_mising_files)}, contents will be assumed")
     
     def _load_component_parameters(self):
-        self.x_start = 50000
-        self.x_stop = 0
+        self.x_start = self.x_stop + self.box_length
+        
         self.y_offset = 0
         if self.component_parameters_path is not None:
             with open(self.component_parameters_path) as file:
@@ -961,47 +961,64 @@ class ljx_processor:
     
     def _load_lidar_data(self):
         if self.lidar2xrf_path is None:
-            self.transformation_matrix = np.array([[1,0,0,192],
+            self.transformation_matrix = cp.array([[1,0,0,192],
                                                   [0,-1,0,9.3],
                                                   [0,0,-1,53.8],
                                                   [0,0,0,1]])
         else: 
             with open(self.lidar2xrf_path) as file:
                 lines = file.readlines()
-                self.transformation_matrix = np.array([list(map(float, line.strip().split(","))) for line in lines])
+                self.transformation_matrix = cp.array([list(map(float, line.strip().split(","))) for line in lines])
 
-        self.point_cloud = np.fromfile(self.bpc_path, dtype=np.float32).reshape(-1, 3)
+        
+        self.point_cloud = cp.fromfile(self.bpc_path, dtype=np.float32).reshape(-1, 3)
+        
     
-        self.original_cloud_limits = [np.nanmax(self.point_cloud[:,0]),np.nanmin(self.point_cloud[:,0]), len(np.unique(self.point_cloud[:,0])),
-                                      np.nanmax(self.point_cloud[:,1]),np.nanmin(self.point_cloud[:,1]), len(np.unique(self.point_cloud[:,1])),
-                                      np.nanmax(self.point_cloud[:,2]),np.nanmin(self.point_cloud[:,2]), len(self.point_cloud[:,2])]
+        self.original_cloud_limits = [cp.nanmax(self.point_cloud[:,0]),cp.nanmin(self.point_cloud[:,0]), len(cp.unique(self.point_cloud[:,0])),
+                                      cp.nanmax(self.point_cloud[:,1]),cp.nanmin(self.point_cloud[:,1]), len(cp.unique(self.point_cloud[:,1])),
+                                      cp.nanmax(self.point_cloud[:,2]),cp.nanmin(self.point_cloud[:,2]), len(self.point_cloud[:,2])]
+        
+        self.point_cloud = (cp.hstack((self.point_cloud, cp.ones((self.point_cloud.shape[0], 1)))) @ self.transformation_matrix.T)[:,:3]
 
-        self.point_cloud = (np.hstack((self.point_cloud, np.ones((self.point_cloud.shape[0], 1)))) @ self.transformation_matrix.T)[:,:3]
-
-        self.translated_cloud_limits = [np.nanmax(self.point_cloud[:,0]),np.nanmin(self.point_cloud[:,0]), len(np.unique(self.point_cloud[:,0])),
-                                      np.nanmax(self.point_cloud[:,1]),np.nanmin(self.point_cloud[:,1]), len(np.unique(self.point_cloud[:,1])),
-                                      np.nanmax(self.point_cloud[:,2]),np.nanmin(self.point_cloud[:,2]), len(self.point_cloud[:,2])]
+        self.translated_cloud_limits = [cp.nanmax(self.point_cloud[:,0]),cp.nanmin(self.point_cloud[:,0]), len(cp.unique(self.point_cloud[:,0])),
+                                      cp.nanmax(self.point_cloud[:,1]),cp.nanmin(self.point_cloud[:,1]), len(cp.unique(self.point_cloud[:,1])),
+                                      cp.nanmax(self.point_cloud[:,2]),cp.nanmin(self.point_cloud[:,2]), len(self.point_cloud[:,2])]
     
     def _get_gradient(self):
         array_z = cp.array(self.point_cloud, dtype=cp.float32)
         y_values = self.i_to_y_list
-        sobel_y = cp.array([
-                [-20.75,],
-                [ -11.6,],
-                [ -6.27,],
-                [    -2,],
-                [     0,],
-                [     2,],
-                [  6.27,],
-                [  11.6,],
-                [ 20.75,]
-        ])
+        sobel_y = cp.array([[ 1.59 ,  3.18 ,  1.59 ],
+                            [ 1.052,  2.103,  1.052],
+                            [ 0.76 ,  1.52 ,  0.76 ],
+                            [ 0.548,  1.096,  0.548],
+                            [ 0.373,  0.746,  0.373],
+                            [ 0.217,  0.435,  0.217],
+                            [ 0.071,  0.143,  0.071],
+                            [ 0.   ,  0.   ,  0.   ],
+                            [-0.071, -0.143, -0.071],
+                            [-0.217, -0.435, -0.217],
+                            [-0.373, -0.746, -0.373],
+                            [-0.548, -1.096, -0.548],
+                            [-0.76 , -1.52 , -0.76 ],
+                            [-1.052, -2.103, -1.052],
+                            [-1.59 , -3.18 , -1.59 ]])
+        
+        sobel_y =  cp.array([[ 1,  2,  1],
+                            [ 2,  4,  2],
+                            [ 3,  6,  3],
+                            [ 0,  0,  0],
+                            [-3, -6, -3],
+                            [-2, -4, -2],
+                            [-1, -2, -1]])
+
+        
         sobel_x = sobel_y.T
 
         x_grad_z = cp.abs(cpconvolve(array_z, sobel_y))
         y_grad_z = cp.abs(cpconvolve(array_z, sobel_x))
-        magnitude_z = cp.sqrt(x_grad_z**2 + y_grad_z**2)
-        y_grad_z = cp.abs(cpconvolve(magnitude_z, sobel_x))
+        magnitude = cp.sqrt(x_grad_z**2 + y_grad_z**2)
+        y_grad_z = cp.abs(cpconvolve(magnitude, sobel_x))
+        x_grad_z = cp.abs(cpconvolve(magnitude, sobel_y))
         magnitude = cp.sqrt(x_grad_z**2 + y_grad_z**2)
 
         y_bottom = np.argmin(np.abs(y_values - self.window_size))
@@ -1012,7 +1029,7 @@ class ljx_processor:
 
         self.gradient = cp.asnumpy(magnitude)
 
-    def _create_PCA_mask(self,y_window = 10, x_window = 10, batch_size = 100, i = 1, **kwargs):
+    def _create_PCA_mask(self,y_window = 3, x_window = 6, batch_size = 100, **kwargs):
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
                 setattr(self, key, value)
@@ -1027,8 +1044,8 @@ class ljx_processor:
         y_bottom = np.argmin(np.abs(y_values - self.window_size))
         y_top = np.argmin(np.abs(y_values + self.window_size))
 
-        x_n = cp.arange(-x_window, x_window + 1) /6.5
-        y_n = cp.arange(-y_window, y_window + 1) /6.5
+        x_n = cp.arange(-x_window, x_window + 1) * self.x_pixel_size
+        y_n = cp.arange(-y_window, y_window + 1) * self.y_pixel_size
         valid_x = cp.repeat(x_n, y_range).flatten()
         valid_y = cp.tile(y_n, x_range).flatten()
         eigvals_2 = cp.zeros_like(pc) 
@@ -1054,8 +1071,10 @@ class ljx_processor:
                 cov_matrices = cp.einsum('...ik,...jk->...ij', points, points) / (y_range * x_range - 1)
 
                 eigvals = cp.linalg.eigvalsh(cov_matrices)
-                print(eigvals[0,0])
-                e2 = eigvals[:, :, i] 
+            
+                e2 = eigvals[:, :, 1] 
+
+                
 
                 eigvals_2[y - y_window:y + batch_size - y_window, x - x_window:x + batch_size - x_window] = e2
 
@@ -1109,7 +1128,7 @@ class ljx_processor:
             return_properties.append(mean)
             return_properties.append(max)
             return_properties.append(np.abs(properties[1]))
-            return_properties.append(np.arctan(z)/(np.pi/2))
+            return_properties.append(np.arccos(z)/(np.pi/2))
 
             self.vectors.append(return_properties)
 
@@ -1130,37 +1149,43 @@ class ljx_processor:
         mask = (self.point_cloud[:,0] <= self.x_start) & (self.point_cloud[:,0] >= self.x_stop) & ((self.point_cloud[:,1]) <= (self.window_size + 5 + self.y_shift)) & ((self.point_cloud[:,1]) >=  -(self.window_size + 5 - self.y_shift))
         self.point_cloud = self.point_cloud[mask]
         self.point_cloud[:,1] -= self.y_shift
+        min_z = cp.nanmax(self.point_cloud[:,2])
 
-        min_z = np.nanmax(self.point_cloud[:,2])
+        missing = np.where(self.point_cloud[:,2] == min_z)
 
-        x_values = np.unique(self.point_cloud[:,0])
-        y_values = np.unique(self.point_cloud[:,1]) 
-        x_range = len(x_values)
+        self.point_cloud[missing,2] = 250
 
-        x_value_dict = {x: index for index,x in enumerate(x_values)}
-        y_value_dict = {y: index for index,y in enumerate(y_values)}
+        x_values = cp.unique(self.point_cloud[:,0])
 
-        point_array = np.full((len(y_values), x_range),np.nan)
-        point_dictionary = {(row[0],row[1]): (index, row[2]) for index,row in enumerate(self.point_cloud)}
+        self.x_pixel_size = cp.median(cp.diff(x_values))
+        y_values = cp.unique(self.point_cloud[:,1])
+        self.y_pixel_size = cp.mean(cp.diff(y_values))
 
-        for x in range (x_range):
-            for y in range (len(y_values)):
-                x_val = x_values[x]
-                y_val = y_values[y]
+        height = len(y_values)
+        width = len(x_values)
 
-                point_z = point_dictionary.get((x_val,y_val))
+        point_array = self.point_cloud[:,2].reshape(width,height).T
 
-                if point_z[1] != min_z:
-                    point_array[y,x] = point_z[1]
-                else:
-                    point_array[y,x] = 250
-        
-        self.y_seed_point = np.argmin(np.abs(y_values))
-        self.point_cloud = point_array
-        self.x_to_i_dict = x_value_dict
-        self.i_to_x_list = x_values
-        self.y_to_i_dict = y_value_dict
-        self.i_to_y_list = y_values
+        kernel_9x9 = cp.array([
+            [0.00000067, 0.00002292, 0.00019117, 0.00038771, 0.00024405, 0.00038771, 0.00019117, 0.00002292, 0.00000067],
+            [0.00002292, 0.00078634, 0.0065555 , 0.0133062 , 0.00838514, 0.0133062 , 0.0065555 , 0.00078634, 0.00002292],
+            [0.00019117, 0.0065555 , 0.0547216 , 0.111566 , 0.070297 , 0.111566 , 0.0547216 , 0.0065555 , 0.00019117],
+            [0.00038771, 0.0133062 , 0.111566 , 0.22712  , 0.143815 , 0.22712  , 0.111566 , 0.0133062 , 0.00038771],
+            [0.00024405, 0.00838514, 0.070297 , 0.143815 , 0.091383 , 0.143815 , 0.070297 , 0.00838514, 0.00024405],
+            [0.00038771, 0.0133062 , 0.111566 , 0.22712  , 0.143815 , 0.22712  , 0.111566 , 0.0133062 , 0.00038771],
+            [0.00019117, 0.0065555 , 0.0547216 , 0.111566 , 0.070297 , 0.111566 , 0.0547216 , 0.0065555 , 0.00019117],
+            [0.00002292, 0.00078634, 0.0065555 , 0.0133062 , 0.00838514, 0.0133062 , 0.0065555 , 0.00078634, 0.00002292],
+            [0.00000067, 0.00002292, 0.00019117, 0.00038771, 0.00024405, 0.00038771, 0.00019117, 0.00002292, 0.00000067]
+        ])
+
+        kernel_9x9 /= cp.sum(kernel_9x9)
+
+        point_array = cpconvolve(point_array, kernel_9x9)
+            
+        self.y_seed_point = np.argmin(np.abs(y_values.get()))
+        self.point_cloud = cp.asnumpy(point_array)
+        self.i_to_x_list = x_values.get()
+        self.i_to_y_list = y_values.get()
 
     def _create_edge_array(self,  **kwargs):
         for key, value in kwargs.items():
@@ -1266,7 +1291,7 @@ class ljx_processor:
                 for x in center_x_vals:
                     self.labeled_x_values[x] = closest_label
 
-    def _classify_rubble(self, x_window=3, y_window=4, **kwargs):
+    def _classify_rubble(self, x_window=5, y_window=4, **kwargs):
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
                 setattr(self, key, value)
@@ -1277,8 +1302,8 @@ class ljx_processor:
         width = pc.shape[1]
         y_range, x_range = 2 * y_window + 1, 2 * x_window + 1
 
-        x_n = cp.arange(-x_window, x_window + 1) /6.5
-        y_n = cp.arange(-y_window, y_window + 1) /6.5
+        x_n = cp.arange(-x_window, x_window + 1) * self.x_pixel_size
+        y_n = cp.arange(-y_window, y_window + 1) * self.y_pixel_size
         valid_x = cp.repeat(x_n, y_range).flatten()
         valid_y = cp.tile(y_n, x_range).flatten()
 
@@ -1306,13 +1331,13 @@ class ljx_processor:
         x_offset = cp.abs(cp.arctan(eigvecs[:,0]/eigvecs[:,2]))
         y_offset = cp.abs(cp.arctan(eigvecs[:,1]/eigvecs[:,2]))
 
-        results = {self.i_to_x_list[i]: self.labeled_x_values[i] if self.labeled_x_values[i] != 0 else [float(eigvals[i]),float(x_offset[i]),float(y_offset[i])] for i in range(len(self.i_to_x_list))}
+        results = {self.i_to_x_list[i]: [self.labeled_x_values[i],float(eigvals[i]),float(x_offset[i]),float(y_offset[i])] for i in range(len(self.i_to_x_list))}
 
         cp.get_default_memory_pool().free_all_blocks()
  
         self.rubble_classifications = results
    
-    def _define_correction_windows(self, xrf_window_size=10,noise_threshold = 1, **kwargs):
+    def _define_correction_windows(self, xrf_window_size=10,noise_threshold = 0.25, **kwargs):
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
                 setattr(self, key, value)
@@ -1322,42 +1347,37 @@ class ljx_processor:
 
         windows = {}
 
-        for x_start in range(0, round(np.nanmax(self.i_to_x_list)), xrf_window_size):
+        for x_start in np.arange(0, np.nanmax(self.i_to_x_list), xrf_window_size):
             values = [self.rubble_classifications[i] for i, x in zip(self.i_to_x_list, self.i_to_x_list) 
             if x_start <= x < x_start + xrf_window_size]
-    
             if values:
+                values = np.array(values)
+        
                 x_end = max(x for x in self.i_to_x_list if x_start <= x < x_start + xrf_window_size)
                 x_start = min(x for x in self.i_to_x_list if x_start <= x < x_start + xrf_window_size)
             
-                labels = np.array([v for v in values if v in [1,2,3]])
-                rubble_points = [v for v in values if v not in [0,1,2,3]]
                 
-                rubble_points = np.array(rubble_points)
-            
-                half_perc = np.sum(labels == 1) / len(values)
-                empty_perc = np.sum(labels == 2) / len(values)
-                full_perc = np.sum(labels == 3) / len(values)
+                half_perc = np.sum(values[:,0] == 1) / len(values)
+                empty_perc = np.sum(values[:,0] == 2) / len(values)
+                full_perc = np.sum(values[:,0] == 3) / len(values)
+
                 rubble_perc = 1 - half_perc - empty_perc - full_perc
 
-                if rubble_points.size > 0:
-                    avg_var = np.nanmean(rubble_points[:, 0])
-                    avg_x_offset = np.nanmean(rubble_points[:, 1])
-                    avg_y_offset = np.nanmean(rubble_points[:, 2])
-                else:
-                    avg_var = avg_x_offset = avg_y_offset = np.nan  
+                avg_var = np.nanmean(values[:, 1])
+                avg_x_offset = np.nanmean(values[:, 2])
+                avg_y_offset = np.nanmean(values[:, 3])
 
                 windows[(x_start, x_end)] = [half_perc, full_perc, empty_perc, rubble_perc, avg_var, avg_x_offset, avg_y_offset]
 
         self.correction_windows = windows
 
-    def _save_correction_windows(self, xrf_window_size=10, **kwargs):
+    def _save_correction_windows(self, xrf_window_size=10, noise_threshold = 0.25, **kwargs):
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
                 setattr(self, key, value)
 
         if self.correction_windows == None:
-            self._define_correction_windows(xrf_window_size)
+            self._define_correction_windows(xrf_window_size, noise_threshold=noise_threshold)
         
         os.makedirs(self.file_path, exist_ok=True)
         
@@ -1374,10 +1394,10 @@ class ljx_processor:
                 setattr(self, key, value)
 
         if  xrf_window_size is not None:
-            self._define_correction_windows(xrf_window_size)
+            self._define_correction_windows(xrf_window_size,noise_threshold=noise_threshold)
 
         if self.correction_windows is None or changed:
-            self._define_correction_windows()
+            self._define_correction_windows(noise_threshold=noise_threshold)
 
 
         fig, ax = plt.subplots(figsize=(width, height), dpi=dpi)
@@ -1408,29 +1428,32 @@ class ljx_processor:
             ratios = np.array([half_perc, empty_perc, full_perc, rubble_perc])
             ratios /= ratios.sum()  
 
-            width = self.x_to_i_dict[x_end] - self.x_to_i_dict[x_start] + 1
+            start_i = np.where(self.i_to_x_list == x_start)[0]
+
+            width = np.where(self.i_to_x_list == x_end)[0] - start_i + 1
             bar_heights = ratios * 12  
             bottoms = self.y_seed_point - 6 + np.insert(np.cumsum(bar_heights[:-1]), 0, 0)
 
             for j in range(4):
-                ax.bar(self.x_to_i_dict[x_start], height=bar_heights[j], width=width,
+                ax.bar(start_i, height=bar_heights[j], width=width,
                     bottom=bottoms[j], color=colormap[j], alpha=0.65, align='edge')
 
-            if rubble_perc > 0:
-                var, x_angle, y_angle = values[4:]
-                norm1 = plt.Normalize(vmin=min_var, vmax=max_var)
-                norm2 = plt.Normalize(vmin=min_angle, vmax=max_angle)
-                color1 = cmap1(norm1(var))
-                color2 = cmap2(norm2(x_angle))
-                color3 = cmap2(norm2(y_angle))
-                extra_heights = 7.5
+            var, x_angle, y_angle = values[4:]
+            norm1 = plt.Normalize(vmin=min_var, vmax=max_var)
+            norm2 = plt.Normalize(vmin=min_angle, vmax=max_angle)
+            color1 = cmap1(norm1(var))
+            color2 = cmap2(norm2(x_angle))
+            color3 = cmap2(norm2(y_angle))
+            extra_heights = 7.5
 
-                ax.bar(self.x_to_i_dict[x_start], height=extra_heights, width=width,
-                    bottom=0, color=color1, alpha=0.75, align='edge')
-                ax.bar(self.x_to_i_dict[x_start], height=extra_heights, width=width,
-                    bottom=extra_heights, color=color2, alpha=0.75, align='edge')
-                ax.bar(self.x_to_i_dict[x_start], height=extra_heights, width=width,
-                    bottom=extra_heights*2, color=color3, alpha=0.75, align='edge')
+
+
+            ax.bar(start_i, height=extra_heights, width=width,
+                bottom=0, color=color1, alpha=0.75, align='edge')
+            ax.bar(start_i, height=extra_heights, width=width,
+                bottom=extra_heights, color=color2, alpha=0.75, align='edge')
+            ax.bar(start_i, height=extra_heights, width=width,
+                bottom=extra_heights*2, color=color3, alpha=0.75, align='edge')
 
         ax.set_xlabel("X index",fontsize = 20)
         ax.set_ylabel("Y index",fontsize = 20)
@@ -1453,6 +1476,7 @@ class ljx_processor:
         ax.set_xlabel("X index",fontsize = 20)
         ax.set_ylabel("Y index",fontsize = 20)
         ax.set_title(self.name, fontsize=35)
+        plt.show()
     
     def _plot_edges(self,width = 150, height = 7, dpi = 75, **kwargs):
         changed = False
@@ -1469,6 +1493,7 @@ class ljx_processor:
         ax.set_xlabel("X index",fontsize = 20)
         ax.set_ylabel("Y index",fontsize = 20)
         ax.set_title(self.name, fontsize=35)
+        plt.show()
 
     def _plot_PCA_mask(self,plot_point_cloud = False, width = 150, height = 7, dpi = 75, **kwargs):
 
@@ -1491,6 +1516,7 @@ class ljx_processor:
         ax.set_xlabel("X index")
         ax.set_ylabel("Y index")
         ax.set_title(self.name)
+        plt.show()
 
     def _plot_sections(self,plot_point_cloud = True, width = 150, height = 7, dpi = 75, **kwargs):
         changed = False
@@ -1533,6 +1559,7 @@ class ljx_processor:
         ax.set_xlabel("X index")
         ax.set_ylabel("Y index")
         ax.set_title(self.name)
+        plt.show()
 
     def _print_instance_attributes(self):
         for attr, value in vars(self).items():
@@ -1559,6 +1586,7 @@ class ljx_processor:
         ax.set_xlabel("X index")
         ax.set_ylabel("Y index")
         ax.set_title(self.name)
+        plt.show()
 
     def _get_data_cube(self):
         x = (list)(self.i_to_x_list) * len(self.i_to_y_list)
@@ -1583,7 +1611,7 @@ class ljx_processor:
 
         las.write(file_path)
 
-    def _print_scan_limits(self, translated = False):
+    def _print_scan_limits(self, translated = True):
         if translated:
             data = self.translated_cloud_limits
             print(f"limits in machine coordinates for {self.name}:")
@@ -1594,5 +1622,4 @@ class ljx_processor:
         print(f" x value range: {data[0]}mm to {data[1]}mm, number of lines in the x direction: {data[2]}")
         print(f" y value range: {data[3]}mm to {data[4]}mm, number of lines in the y direction: {data[5]}")
         print(f" z value range: {data[6]}mm to {data[7]}mm, total number of points: {data[8]}")
-
-
+        print(f"pixel size: {self.x_pixel_size}mm in the x direction, {self.y_pixel_size}mm in the y direction")
