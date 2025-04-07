@@ -17,7 +17,7 @@ from scipy.spatial import KDTree
 
 class lidar_processor:
     def __init__(self, file_path, DBSCAN_model_path = None, window_size = 10, upsample_ratio = 2, y_shift = 0, name=None,  
-                strong_edge_threshold = 80, weak_edge_threshold = 30, strong_PCA_threshold = 0.01, weak_PCA_threshold = 0.0075, colourmap = 'binary'):
+                strong_edge_threshold = 80, weak_edge_threshold = 30, strong_PCA_threshold = 0.4, weak_PCA_threshold = 0.21, colourmap = 'binary'):
         if DBSCAN_model_path is None:
             current_dir = os.getcwd()
             self.DBSCAN_model_path = os.path.join(current_dir, 'cluster_kd_tree.pkl')
@@ -36,6 +36,7 @@ class lidar_processor:
         self.y_shift = y_shift
         self.tree = None
         self.labels = None
+        self.vectors = []
 
         self.correction_windows = None
         self.labeled_x_values = None   
@@ -200,9 +201,18 @@ class lidar_processor:
         self.point_cloud = np.fromfile(self.bpc_path, dtype=np.float32).reshape(-1, 3)
         intensity_values = cv2.imread(self.intensity_path, cv2.IMREAD_ANYDEPTH)
         intensity_values = np.reshape(intensity_values,(-1,1))
+
+        self.original_cloud_limits = [np.nanmax(self.point_cloud[:,0]),np.nanmin(self.point_cloud[:,0]), len(np.unique(self.point_cloud[:,0])),
+                                      np.nanmax(self.point_cloud[:,1]),np.nanmin(self.point_cloud[:,1]), len(np.unique(self.point_cloud[:,1])),
+                                      np.nanmax(self.point_cloud[:,2]),np.nanmin(self.point_cloud[:,2]), len(self.point_cloud[:,2])]
+
         self.intensity_cloud = np.hstack((self.point_cloud[:,:2], intensity_values))
         self.point_cloud = (np.hstack((self.point_cloud, np.ones((self.point_cloud.shape[0], 1)))) @ self.transformation_matrix.T)[:,:3]
         self.intensity_cloud = (np.hstack((self.intensity_cloud, np.ones((self.intensity_cloud.shape[0], 1)))) @ self.transformation_matrix.T)[:,:3]
+
+        self.translated_cloud_limits = [np.nanmax(self.point_cloud[:,0]),np.nanmin(self.point_cloud[:,0]), len(np.unique(self.point_cloud[:,0])),
+                                      np.nanmax(self.point_cloud[:,1]),np.nanmin(self.point_cloud[:,1]), len(np.unique(self.point_cloud[:,1])),
+                                      np.nanmax(self.point_cloud[:,2]),np.nanmin(self.point_cloud[:,2]), len(self.point_cloud[:,2])]
     
     def _get_gradient(self):
         array_i = cp.array(np.log(np.abs(self.intensity_cloud)), dtype=cp.float32)
@@ -243,65 +253,60 @@ class lidar_processor:
 
         self.gradient = cp.asnumpy(magnitude)
 
-    def _create_PCA_mask(self,y_window = 9, x_window = 2, **kwargs):
+    def _create_PCA_mask(self,y_window = 3, x_window = 4, batch_size = 100, **kwargs):
+
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
                 setattr(self, key, value)
 
-        s = self.strong_PCA_threshold
-        w = self.weak_PCA_threshold
+        s = self.strong_PCA_threshold 
+        w = self.weak_PCA_threshold 
         pc = cp.array(self.point_cloud)
         y_values = self.i_to_y_list
-        height, width = pc.shape
 
         y_range, x_range = 2 * y_window + 1, 2 * x_window + 1
 
         y_bottom = np.argmin(np.abs(y_values - self.window_size))
         y_top = np.argmin(np.abs(y_values + self.window_size))
 
-        x_n = cp.arange(-x_window, x_window + 1) /self.upsample_ratio
+        x_n = cp.arange(-x_window, x_window + 1) /self.upsample_ratio 
         y_n = cp.arange(-y_window, y_window + 1) /4.5
         valid_x = cp.repeat(x_n, y_range).flatten()
         valid_y = cp.tile(y_n, x_range).flatten()
+        eigvals_2 = cp.zeros_like(pc) 
+        pc = cp.pad(pc, ((y_window,y_window), (x_window,x_window)), mode='edge')
 
-        points = cp.lib.stride_tricks.sliding_window_view(
-            cp.pad(pc, ((y_window,y_window), (x_window,x_window)), mode='edge'), (y_range, x_range)
-        )
-        del pc
+        for x in range(x_window, pc.shape[1] - x_window, batch_size):
+            for y in range(y_window, pc.shape[0] - y_window, batch_size):
+                batch = pc[y - y_window:y + batch_size + y_window, x - x_window:x + batch_size + x_window]
 
-        points = points.reshape(height,width, y_range*x_range)
-        
-        points = cp.stack((
-            cp.broadcast_to(valid_x, (height,width, y_range*x_range)),
-            cp.broadcast_to(valid_y, (height,width, y_range*x_range)),
-            points), axis=2)
-        mean_vals = cp.mean(points[:,:,2,:], axis=(2), keepdims=True)
-        points[:,:,2,:] -= mean_vals
+                points = cp.lib.stride_tricks.sliding_window_view(batch, (y_range, x_range))
 
-        cov_matrices = cp.matmul(points, points.transpose(0, 1, 3, 2)) / (points.shape[3] - 1)
-        del points 
+                height, width = points.shape[:2]
+                points = points.reshape(height, width, y_range * x_range)
 
-        a, b, c, d, e, f, g, h, i = (
-            cov_matrices[:, :, 0, 0], cov_matrices[:, :, 0, 1], cov_matrices[:, :, 0, 2],
-            cov_matrices[:, :, 1, 0], cov_matrices[:, :, 1, 1], cov_matrices[:, :, 1, 2],
-            cov_matrices[:, :, 2, 0], cov_matrices[:, :, 2, 1], cov_matrices[:, :, 2, 2]
-        )
+                points = cp.stack((
+                    cp.broadcast_to(valid_x, (height, width, y_range * x_range)),
+                    cp.broadcast_to(valid_y, (height, width, y_range * x_range)),
+                    points), axis=2)
 
-        p1 = b**2 + c**2 + f**2
-        q = (a + e + i) / 3
-        p2 = (a - q)**2 + (e - q)**2 + (i - q)**2 + 2 * p1
-        p = cp.sqrt(p2 / 6)
-        
-        B = (cov_matrices - cp.eye(3, dtype=cp.float32) * q[:, :, None, None]) / p[:, :, None, None]
-        r = cp.linalg.det(B) / 2
-        phi = cp.arccos(cp.clip(r, -1, 1)) / 3
-        del cov_matrices
+                mean_vals = cp.mean(points[:, :, 2, :], axis=2)
+                points[:, :, 2, :] -= mean_vals[..., None]
 
-        eigvals_2 = q + 2 * p * cp.cos(phi + (2 * cp.pi / 3))
+                cov_matrices = cp.einsum('...ik,...jk->...ij', points, points) / (y_range * x_range - 1)
+
+                eigvals = cp.linalg.eigvalsh(cov_matrices)
+            
+                e2 = eigvals[:, :, 1] 
+
+                
+
+                eigvals_2[y - y_window:y + batch_size - y_window, x - x_window:x + batch_size - x_window] = e2
+
         eigvals_2 = cp.asnumpy(eigvals_2)
-        eigvals_2[:y_top, :] = 0
-        eigvals_2[y_bottom:, :] = 0
 
+        eigvals[:y_bottom,:] = 0
+        eigvals[y_top:,:] = 0
         neighbours = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
         strong_y, strong_x = np.where(eigvals_2 >= s)
         weak_values = (eigvals_2 >= w) & (eigvals_2 < s).astype(np.uint8) 
@@ -348,7 +353,9 @@ class lidar_processor:
             return_properties.append(mean)
             return_properties.append(max)
             return_properties.append(np.abs(properties[1]))
-            return_properties.append(np.arctan(z)/(np.pi/2))
+            return_properties.append(np.arccos(z)/(np.pi/2))
+
+            self.vectors.append(return_properties)
 
 
             return return_properties, np.uint8(properties[1] > 0)
@@ -364,8 +371,6 @@ class lidar_processor:
         self._load_component_parameters()
         self._load_lidar_data()
         self._interpolate_x_positions()
-
-
         
         mask = (self.point_cloud[:,0] <= self.x_start) & (self.point_cloud[:,0] >= self.x_stop) & ((self.point_cloud[:,1]) <= (self.window_size + 5 + self.y_shift)) & ((self.point_cloud[:,1]) >=  -(self.window_size + 5 - self.y_shift))
         self.point_cloud = self.point_cloud[mask]
@@ -424,7 +429,7 @@ class lidar_processor:
                 interpolated_z_values= []
                 interpolated_i_values = []
 
-                for dy in [-1,0,1]:
+                for dy in [-4,-3,-2,-1,0,1,2,3,4]:
                     y_dy = y + dy
                     if (y_dy >= 0) & (y_dy < len(y_values)):
                         known_z = point_array[y_dy,known_indices]
@@ -551,12 +556,10 @@ class lidar_processor:
                 for x in center_x_vals:
                     self.labeled_x_values[x] = closest_label
 
-    def _classify_rubble(self, x_window=1, y_window=4,**kwargs):
+    def _classify_rubble(self, x_window= 5, y_window=4, **kwargs):
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
                 setattr(self, key, value)
-
-        x_window = x_window * self.upsample_ratio
 
         pc = cp.array(self.point_cloud)
         pc = pc[self.y_seed_point - y_window:self.y_seed_point + y_window + 1,:]
@@ -564,8 +567,8 @@ class lidar_processor:
         width = pc.shape[1]
         y_range, x_range = 2 * y_window + 1, 2 * x_window + 1
 
-        x_n = cp.arange(-x_window, x_window + 1) /self.upsample_ratio  
-        y_n = cp.arange(-y_window, y_window + 1) /4.5 
+        x_n = cp.arange(-x_window, x_window + 1) / (4 * self.upsample_ratio)
+        y_n = cp.arange(-y_window, y_window + 1) /5
         valid_x = cp.repeat(x_n, y_range).flatten()
         valid_y = cp.tile(y_n, x_range).flatten()
 
@@ -593,46 +596,41 @@ class lidar_processor:
         x_offset = cp.abs(cp.arctan(eigvecs[:,0]/eigvecs[:,2]))
         y_offset = cp.abs(cp.arctan(eigvecs[:,1]/eigvecs[:,2]))
 
-        results = {self.i_to_x_list[i]: self.labeled_x_values[i] if self.labeled_x_values[i] != 0 else [float(eigvals[i]),float(x_offset[i]),float(y_offset[i])] for i in range(len(self.i_to_x_list))}
+        results = {self.i_to_x_list[i]: [self.labeled_x_values[i],float(eigvals[i]),float(x_offset[i]),float(y_offset[i])] for i in range(len(self.i_to_x_list))}
 
         cp.get_default_memory_pool().free_all_blocks()
  
         self.rubble_classifications = results
    
-    def _define_correction_windows(self, xrf_window_size=10, **kwargs):
+    def _define_correction_windows(self, xrf_window_size=10,noise_threshold = 0.1, **kwargs):
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
                 setattr(self, key, value)
 
-        self._define_sections()
+        self._define_sections(noise_threshold=noise_threshold)
         self._classify_rubble()
 
         windows = {}
 
-        for x_start in range(0, round(np.nanmax(self.i_to_x_list)), xrf_window_size):
+        for x_start in np.arange(0, np.nanmax(self.i_to_x_list), xrf_window_size):
             values = [self.rubble_classifications[i] for i, x in zip(self.i_to_x_list, self.i_to_x_list) 
             if x_start <= x < x_start + xrf_window_size]
-    
             if values:
+                values = np.array(values)
+        
                 x_end = max(x for x in self.i_to_x_list if x_start <= x < x_start + xrf_window_size)
                 x_start = min(x for x in self.i_to_x_list if x_start <= x < x_start + xrf_window_size)
             
-                labels = np.array([v for v in values if v in [1,2,3]])
-                rubble_points = [v for v in values if v not in [0,1,2,3]]
                 
-                rubble_points = np.array(rubble_points)
-            
-                half_perc = np.sum(labels == 1) / len(values)
-                empty_perc = np.sum(labels == 2) / len(values)
-                full_perc = np.sum(labels == 3) / len(values)
+                half_perc = np.sum(values[:,0] == 1) / len(values)
+                empty_perc = np.sum(values[:,0] == 2) / len(values)
+                full_perc = np.sum(values[:,0] == 3) / len(values)
+
                 rubble_perc = 1 - half_perc - empty_perc - full_perc
 
-                if rubble_points.size > 0:
-                    avg_var = np.nanmean(rubble_points[:, 0])
-                    avg_x_offset = np.nanmean(rubble_points[:, 1])
-                    avg_y_offset = np.nanmean(rubble_points[:, 2])
-                else:
-                    avg_var = avg_x_offset = avg_y_offset = np.nan  
+                avg_var = np.nanmean(values[:, 1])
+                avg_x_offset = np.nanmean(values[:, 2])
+                avg_y_offset = np.nanmean(values[:, 3])
 
                 windows[(x_start, x_end)] = [half_perc, full_perc, empty_perc, rubble_perc, avg_var, avg_x_offset, avg_y_offset]
 
@@ -653,16 +651,18 @@ class lidar_processor:
         with open(file_path, 'wb') as f:
             pickle.dump(self.correction_windows, f)
 
-    def _plot_correction_windows(self, plot_point_cloud = False, width = 150, height = 7, dpi = 75, xrf_window_size=None,**kwargs):
+    def _plot_correction_windows(self, width = 150, height = 7, dpi = 75, noise_threshold = 0.1, plot_point_cloud = False, xrf_window_size=None,**kwargs):
+        changed = False
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
+                changed = True
                 setattr(self, key, value)
 
         if  xrf_window_size is not None:
-            self._define_correction_windows(xrf_window_size)
+            self._define_correction_windows(xrf_window_size,noise_threshold=noise_threshold)
 
-        if self.correction_windows is None:
-            self._define_correction_windows()
+        if self.correction_windows is None or changed:
+            self._define_correction_windows(noise_threshold=noise_threshold)
 
 
         fig, ax = plt.subplots(figsize=(width, height), dpi=dpi)
@@ -696,29 +696,32 @@ class lidar_processor:
             ratios = np.array([half_perc, empty_perc, full_perc, rubble_perc])
             ratios /= ratios.sum()  
 
-            width = self.x_to_i_dict[x_end] - self.x_to_i_dict[x_start] + 1
+            start_i = np.where(self.i_to_x_list == x_start)[0]
+
+            width = np.where(self.i_to_x_list == x_end)[0] - start_i + 1
             bar_heights = ratios * 12  
             bottoms = self.y_seed_point - 6 + np.insert(np.cumsum(bar_heights[:-1]), 0, 0)
 
             for j in range(4):
-                ax.bar(self.x_to_i_dict[x_start], height=bar_heights[j], width=width,
-                    bottom=bottoms[j], color=colormap[j], alpha=0.65, align='edge')
+                ax.bar(start_i, height=bar_heights[j], width=width,
+                    bottom=bottoms[j], color=colormap[j], alpha=1, align='edge')
 
-            if rubble_perc > 0:
-                var, x_angle, y_angle = values[4:]
-                norm1 = plt.Normalize(vmin=min_var, vmax=max_var)
-                norm2 = plt.Normalize(vmin=min_angle, vmax=max_angle)
-                color1 = cmap1(norm1(var))
-                color2 = cmap2(norm2(x_angle))
-                color3 = cmap2(norm2(y_angle))
-                extra_heights = 7.5
+            var, x_angle, y_angle = values[4:]
+            norm1 = plt.Normalize(vmin=min_var, vmax=max_var)
+            norm2 = plt.Normalize(vmin=min_angle, vmax=max_angle)
+            color1 = cmap1(norm1(var))
+            color2 = cmap2(norm2(x_angle))
+            color3 = cmap2(norm2(y_angle))
+            extra_heights = 7.5
 
-                ax.bar(self.x_to_i_dict[x_start], height=extra_heights, width=width,
-                    bottom=0, color=color1, alpha=0.75, align='edge')
-                ax.bar(self.x_to_i_dict[x_start], height=extra_heights, width=width,
-                    bottom=extra_heights, color=color2, alpha=0.75, align='edge')
-                ax.bar(self.x_to_i_dict[x_start], height=extra_heights, width=width,
-                    bottom=extra_heights*2, color=color3, alpha=0.75, align='edge')
+
+
+            ax.bar(start_i, height=extra_heights, width=width,
+                bottom=0, color=color1, alpha=0.75, align='edge')
+            ax.bar(start_i, height=extra_heights, width=width,
+                bottom=extra_heights, color=color2, alpha=0.75, align='edge')
+            ax.bar(start_i, height=extra_heights, width=width,
+                bottom=extra_heights*2, color=color3, alpha=0.75, align='edge')
 
         ax.set_xlabel("X index",fontsize = 20)
         ax.set_ylabel("Y index",fontsize = 20)
@@ -735,13 +738,16 @@ class lidar_processor:
         ax.set_ylabel("Y index",fontsize = 20)
         ax.set_title(self.name, fontsize=35)
 
-    def _plot_PCA_mask(self,plot_point_cloud = False, plot_intensity_cloud = True, width = 150, height = 7, dpi = 75, colourmap = 'cool', **kwargs):
+    def _plot_PCA_mask(self,plot_point_cloud = False, plot_intensity_cloud = True, width = 150, height = 7, dpi = 75, **kwargs):
+        changed = False
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
+                changed = True
                 setattr(self, key, value)
 
-        if self.PCA_mask is None:
+        if self.PCA_mask is None or changed:
             self._create_PCA_mask()
+
         fig, ax = plt.subplots(figsize=(width, height), dpi=dpi)
         a = 1
         if plot_intensity_cloud:
@@ -750,7 +756,7 @@ class lidar_processor:
         if plot_point_cloud:
             ax.imshow(cp.flipud(self.point_cloud), cmap=self.colourmap, interpolation='nearest', alpha = 1, aspect = 'auto')
             a = 0.25
-        ax.imshow(cp.flipud(self.PCA_mask), cmap=self.colourmap, interpolation='nearest', alpha = a, aspect = 'auto')
+        ax.imshow(cp.flipud(self.PCA_mask), cmap='nipy_spectral', interpolation='nearest', alpha = a, aspect = 'auto')
         ax.set_xlabel("X index")
         ax.set_ylabel("Y index")
         ax.set_title(self.name)
@@ -816,6 +822,7 @@ class lidar_processor:
         
         o3d.visualization.draw_geometries([pcd])
 
+
     def _plot_point_cloud(self,width = 150, height = 7, dpi = 75, **kwargs):
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
@@ -848,19 +855,35 @@ class lidar_processor:
 
         return np.column_stack((x, y, z))
 
-    def _save_to_csv(self,intensity = False):
+    def _save_to_las(self):
         x = (list)(self.i_to_x_list) * len(self.i_to_y_list)
         y = np.repeat(self.i_to_y_list, len(self.i_to_x_list))
-        if intensity:
-            z = self.intensity_cloud.flatten()
-        else:
-            z = self.point_cloud.flatten()
-    
-        data_cube = np.column_stack((x, y, z))
+        i = self.intensity_cloud.flatten()
+        z = self.point_cloud.flatten()
 
-        file_path = os.path.join(self.file_path, "point_cloud.csv")
-        
-        np.savetxt(file_path, data_cube, fmt="%.6f", delimiter=",", header="X,Y,Z", comments="")
+        file_path = os.path.join(self.file_path, "point_cloud.las")
+
+        header = laspy.LasHeader(point_format=1, version="1.2") 
+        las = laspy.LasData(header)
+
+        las.x = np.array(x)
+        las.y = np.array(y)
+        las.z = np.array(z)
+        las.intensity = np.array(i)
+
+        las.write(file_path)
+
+    def _print_scan_limits(self, translated = False):
+        if translated:
+            data = self.translated_cloud_limits
+            print(f"limits in machine coordinates for {self.name}:")
+        else:
+            data = self.original_cloud_limits
+            print(f"limits in lidar coordinates for {self.name}:")
+
+        print(f" x value range: {data[0]}mm to {data[1]}mm, number of lines in the x direction: {data[2]}")
+        print(f" y value range: {data[3]}mm to {data[4]}mm, number of lines in the y direction: {data[5]}")
+        print(f" z value range: {data[6]}mm to {data[7]}mm, total number of points: {data[8]}")
 
 class ljx_processor:
     def __init__(self, file_path, DBSCAN_model_path = None, window_size = 10, y_shift = 0, name=None,  
