@@ -864,7 +864,7 @@ class lidar_processor:
 
 class ljx_processor:
     def __init__(self, file_path, DBSCAN_model_path = None, window_size = 10, y_shift = 0, name=None,  
-                strong_edge_threshold = 80, weak_edge_threshold = 30, strong_PCA_threshold = 0.01, weak_PCA_threshold = 0.0075, 
+                strong_edge_threshold = 125, weak_edge_threshold = 75, strong_PCA_threshold = 0.4, weak_PCA_threshold = 0.2, 
                 colourmap = 'binary_r', x_stop = 0 , box_length = 1500):
         
         if DBSCAN_model_path is None:
@@ -1036,13 +1036,17 @@ class ljx_processor:
 
         self.gradient = cp.asnumpy(magnitude)
 
-    def _create_PCA_mask(self,y_window = 3, x_window = 6, batch_size = 100, **kwargs):
+    def _create_PCA_mask(self,y_window = 3, x_window = 9, batch_size = 100, **kwargs):
+
+        y_window = int(cp.round(0.75/self.y_pixel_size))
+        x_window = int(cp.round(1.5/self.x_pixel_size))
+
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
                 setattr(self, key, value)
 
-        s = self.strong_PCA_threshold
-        w = self.weak_PCA_threshold
+        s = self.strong_PCA_threshold 
+        w = self.weak_PCA_threshold 
         pc = cp.array(self.point_cloud)
         y_values = self.i_to_y_list
 
@@ -1304,7 +1308,7 @@ class ljx_processor:
                 for x in center_x_vals:
                     self.labeled_x_values[x] = closest_label
 
-    def _classify_rubble(self, x_window=5, y_window=4, **kwargs):
+    def _classify_rubble(self, x_window= 5, y_window=4, **kwargs):
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
                 setattr(self, key, value)
