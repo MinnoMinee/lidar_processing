@@ -865,7 +865,7 @@ class lidar_processor:
 class ljx_processor:
     def __init__(self, file_path, DBSCAN_model_path = None, window_size = 10, y_shift = 0, name=None,  
                 strong_edge_threshold = 80, weak_edge_threshold = 30, strong_PCA_threshold = 0.01, weak_PCA_threshold = 0.0075, 
-                colourmap = 'binary', x_stop = 0 , box_length = 1500):
+                colourmap = 'binary_r', x_stop = 0 , box_length = 1500):
         
         if DBSCAN_model_path is None:
             current_dir = os.getcwd()
@@ -915,6 +915,7 @@ class ljx_processor:
         self.component_parameters_path = None
         self.lidar2xrf_path = None
         self.bpc_path = None
+        self.intensity_path = None
 
         for file_name in os.listdir(self.file_path):
             full_path = os.path.join(self.file_path, file_name)
@@ -923,12 +924,16 @@ class ljx_processor:
             elif file_name.endswith(".lidar2xrf"):
                 self.lidar2xrf_path = full_path
             elif file_name.endswith(".bpc"):
-                self.bpc_path = full_path
+                if "intensity" in file_name:
+                    self.intensity_path = full_path
+                else:
+                    self.point_path = full_path
 
     def _validate_files(self):
         missing_files = [
             name for name, path in {
-                "bpc": self.bpc_path,
+                "point_cloud": self.point_path,
+                "intensity_cloud": self.intensity_path
             }.items() if path is None
         ]
 
@@ -971,9 +976,10 @@ class ljx_processor:
                 self.transformation_matrix = cp.array([list(map(float, line.strip().split(","))) for line in lines])
 
         
-        self.point_cloud = cp.fromfile(self.bpc_path, dtype=np.float32).reshape(-1, 3)
-        
-    
+        self.point_cloud = cp.fromfile(self.point_path, dtype=np.float32).reshape(-1, 3)
+        self.intensity_cloud = cp.fromfile(self.intensity_path, dtype=np.float32).reshape(-1, 3)[:,2]
+
+
         self.original_cloud_limits = [cp.nanmax(self.point_cloud[:,0]),cp.nanmin(self.point_cloud[:,0]), len(cp.unique(self.point_cloud[:,0])),
                                       cp.nanmax(self.point_cloud[:,1]),cp.nanmin(self.point_cloud[:,1]), len(cp.unique(self.point_cloud[:,1])),
                                       cp.nanmax(self.point_cloud[:,2]),cp.nanmin(self.point_cloud[:,2]), len(self.point_cloud[:,2])]
@@ -1145,10 +1151,14 @@ class ljx_processor:
         self._validate_files()
         self._load_component_parameters()
         self._load_lidar_data()
+
         
-        mask = (self.point_cloud[:,0] <= self.x_start) & (self.point_cloud[:,0] >= self.x_stop) & ((self.point_cloud[:,1]) <= (self.window_size + 5 + self.y_shift)) & ((self.point_cloud[:,1]) >=  -(self.window_size + 5 - self.y_shift))
-        self.point_cloud = self.point_cloud[mask]
         self.point_cloud[:,1] -= self.y_shift
+        
+        
+        mask = (self.point_cloud[:,0] <= self.x_start) & (self.point_cloud[:,0] >= self.x_stop) & ((self.point_cloud[:,1]) <= (self.window_size + 5)) & ((self.point_cloud[:,1]) >=  -(self.window_size + 5))
+        self.point_cloud = self.point_cloud[mask]
+        self.intensity_cloud = self.intensity_cloud[mask]
         min_z = cp.nanmax(self.point_cloud[:,2])
 
         missing = np.where(self.point_cloud[:,2] == min_z)
@@ -1165,15 +1175,16 @@ class ljx_processor:
         width = len(x_values)
 
         point_array = self.point_cloud[:,2].reshape(width,height).T
+        intensity_array = self.intensity_cloud.reshape(width,height).T
 
         kernel_9x9 = cp.array([
             [0.00000067, 0.00002292, 0.00019117, 0.00038771, 0.00024405, 0.00038771, 0.00019117, 0.00002292, 0.00000067],
             [0.00002292, 0.00078634, 0.0065555 , 0.0133062 , 0.00838514, 0.0133062 , 0.0065555 , 0.00078634, 0.00002292],
-            [0.00019117, 0.0065555 , 0.0547216 , 0.111566 , 0.070297 , 0.111566 , 0.0547216 , 0.0065555 , 0.00019117],
-            [0.00038771, 0.0133062 , 0.111566 , 0.22712  , 0.143815 , 0.22712  , 0.111566 , 0.0133062 , 0.00038771],
-            [0.00024405, 0.00838514, 0.070297 , 0.143815 , 0.091383 , 0.143815 , 0.070297 , 0.00838514, 0.00024405],
-            [0.00038771, 0.0133062 , 0.111566 , 0.22712  , 0.143815 , 0.22712  , 0.111566 , 0.0133062 , 0.00038771],
-            [0.00019117, 0.0065555 , 0.0547216 , 0.111566 , 0.070297 , 0.111566 , 0.0547216 , 0.0065555 , 0.00019117],
+            [0.00019117, 0.0065555 , 0.0547216 , 0.111566  , 0.070297  , 0.111566  , 0.0547216 , 0.0065555 , 0.00019117],
+            [0.00038771, 0.0133062 , 0.111566  , 0.22712   , 0.143815  , 0.22712   , 0.111566  , 0.0133062 , 0.00038771],
+            [0.00024405, 0.00838514, 0.070297  , 0.143815  , 0.091383  , 0.143815  , 0.070297  , 0.00838514, 0.00024405],
+            [0.00038771, 0.0133062 , 0.111566  , 0.22712   , 0.143815  , 0.22712   , 0.111566  , 0.0133062 , 0.00038771],
+            [0.00019117, 0.0065555 , 0.0547216 , 0.111566  , 0.070297  , 0.111566  , 0.0547216 , 0.0065555 , 0.00019117],
             [0.00002292, 0.00078634, 0.0065555 , 0.0133062 , 0.00838514, 0.0133062 , 0.0065555 , 0.00078634, 0.00002292],
             [0.00000067, 0.00002292, 0.00019117, 0.00038771, 0.00024405, 0.00038771, 0.00019117, 0.00002292, 0.00000067]
         ])
@@ -1184,6 +1195,7 @@ class ljx_processor:
             
         self.y_seed_point = np.argmin(np.abs(y_values.get()))
         self.point_cloud = cp.asnumpy(point_array)
+        self.intensity_cloud = cp.asnumpy(intensity_array)
         self.i_to_x_list = x_values.get()
         self.i_to_y_list = y_values.get()
 
@@ -1386,7 +1398,7 @@ class ljx_processor:
         with open(file_path, 'wb') as f:
             pickle.dump(self.correction_windows, f)
 
-    def _plot_correction_windows(self, width = 150, height = 7, dpi = 75, noise_threshold = 1, xrf_window_size=None,**kwargs):
+    def _plot_correction_windows(self, width = 150, height = 7, dpi = 75, noise_threshold = 1, plot_point_cloud = False, xrf_window_size=None,**kwargs):
         changed = False
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
@@ -1419,7 +1431,10 @@ class ljx_processor:
         min_angle = np.nanmin(all_angles)
         max_angle = np.nanmax(all_angles)
 
-        display = self.point_cloud
+        if plot_point_cloud:
+            display = self.point_cloud
+        else:
+            display = self.intensity_cloud
         ax.imshow(np.flipud(display), cmap=self.colourmap, interpolation='nearest', alpha=1, aspect= 'auto')
 
         for (x_start, x_end), values in self.correction_windows.items():
@@ -1495,7 +1510,7 @@ class ljx_processor:
         ax.set_title(self.name, fontsize=35)
         plt.show()
 
-    def _plot_PCA_mask(self,plot_point_cloud = False, width = 150, height = 7, dpi = 75, **kwargs):
+    def _plot_PCA_mask(self, width = 150, height = 7, dpi = 75, **kwargs):
 
         changed = False
 
@@ -1509,16 +1524,13 @@ class ljx_processor:
         fig, ax = plt.subplots(figsize=(width, height), dpi=dpi)
         a = 1
 
-        if plot_point_cloud:
-            ax.imshow(cp.flipud(self.point_cloud), cmap=self.colourmap, interpolation='nearest', alpha = 1, aspect = 'auto')
-            a = 0.25
         ax.imshow(cp.flipud(self.PCA_mask), cmap='nipy_spectral', interpolation='nearest', alpha = a, aspect = 'auto')
         ax.set_xlabel("X index")
         ax.set_ylabel("Y index")
         ax.set_title(self.name)
         plt.show()
 
-    def _plot_sections(self,plot_point_cloud = True, width = 150, height = 7, dpi = 75, **kwargs):
+    def _plot_sections(self,plot_point_cloud = False, plot_intensity_cloud = True, width = 150, height = 7, dpi = 75, **kwargs):
         changed = False
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
@@ -1555,6 +1567,8 @@ class ljx_processor:
         if plot_point_cloud:
             ax.imshow(cp.flipud(self.point_cloud), cmap=self.colourmap, interpolation='nearest', alpha = 1, aspect= 'auto')
             a = 0.8
+        if plot_intensity_cloud:
+            ax.imshow(cp.flipud(self.intensity_cloud), cmap=self.colourmap, interpolation='nearest', alpha = 0.8, aspect= 'auto')
         ax.imshow(cp.flipud(sections), cmap='cool', interpolation='nearest', alpha = a, aspect= 'auto')
         ax.set_xlabel("X index")
         ax.set_ylabel("Y index")
@@ -1588,6 +1602,18 @@ class ljx_processor:
         ax.set_title(self.name)
         plt.show()
 
+    def _plot_intensity_cloud(self,width = 150, height = 7, dpi = 75, **kwargs):
+        for key, value in kwargs.items():
+            if value is not None and hasattr(self, key):
+                setattr(self, key, value)
+
+        fig, ax = plt.subplots(figsize=(width, height), dpi=dpi)
+        ax.imshow(cp.flipud(self.intensity_cloud), cmap=self.colourmap, interpolation='nearest', alpha = 1, aspect = 'auto')
+        ax.set_xlabel("X index")
+        ax.set_ylabel("Y index")
+        ax.set_title(self.name)
+        plt.show()
+
     def _get_data_cube(self):
         x = (list)(self.i_to_x_list) * len(self.i_to_y_list)
         y = np.repeat(self.i_to_y_list, len(self.i_to_x_list))
@@ -1600,7 +1626,7 @@ class ljx_processor:
         y = np.repeat(self.i_to_y_list, len(self.i_to_x_list))
         z = self.point_cloud.flatten()
 
-        file_path = os.path.join(self.file_path, "point_cloud.las")
+        file_path = os.path.join(self.file_path, "point_cloud_trimmed.las")
 
         header = laspy.LasHeader(point_format=1, version="1.2") 
         las = laspy.LasData(header)
