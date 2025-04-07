@@ -1354,7 +1354,7 @@ class ljx_processor:
  
         self.rubble_classifications = results
    
-    def _define_correction_windows(self, xrf_window_size=10,noise_threshold = 0.25, **kwargs):
+    def _define_correction_windows(self, xrf_window_size=10,noise_threshold = 0.1, **kwargs):
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
                 setattr(self, key, value)
@@ -1388,7 +1388,7 @@ class ljx_processor:
 
         self.correction_windows = windows
 
-    def _save_correction_windows(self, xrf_window_size=10, noise_threshold = 0.25, **kwargs):
+    def _save_correction_windows(self, xrf_window_size=10, noise_threshold = 0.1, **kwargs):
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
                 setattr(self, key, value)
@@ -1403,7 +1403,7 @@ class ljx_processor:
         with open(file_path, 'wb') as f:
             pickle.dump(self.correction_windows, f)
 
-    def _plot_correction_windows(self, width = 150, height = 7, dpi = 75, noise_threshold = 1, plot_point_cloud = False, xrf_window_size=None,**kwargs):
+    def _plot_correction_windows(self, width = 150, height = 7, dpi = 75, noise_threshold = 0.1, plot_point_cloud = False, xrf_window_size=None,**kwargs):
         changed = False
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
@@ -1654,3 +1654,4 @@ class ljx_processor:
         print(f" y value range: {data[3]}mm to {data[4]}mm, number of lines in the y direction: {data[5]}")
         print(f" z value range: {data[6]}mm to {data[7]}mm, total number of points: {data[8]}")
         print(f"pixel size: {self.x_pixel_size}mm in the x direction, {self.y_pixel_size}mm in the y direction")
+
