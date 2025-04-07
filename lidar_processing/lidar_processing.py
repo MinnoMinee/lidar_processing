@@ -909,12 +909,13 @@ class ljx_processor:
         self.PCA_mask = None
         self.component_parameters_path = None
         self.lidar2xrf_path = None
-        self.bpc_path = None
+        self.point_path = None
+        self.intensity_path = None
     
     def _find_files(self):
         self.component_parameters_path = None
         self.lidar2xrf_path = None
-        self.bpc_path = None
+        self.point_path = None
         self.intensity_path = None
 
         for file_name in os.listdir(self.file_path):
