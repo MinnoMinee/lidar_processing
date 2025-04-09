@@ -1064,8 +1064,8 @@ class ljx_processor:
         height = len(y_values)
         width = len(x_values)
 
-        point_array = self.point_cloud[:,2].reshape(width,height).T
-        intensity_array = self.intensity_cloud.reshape(width,height).T
+        point_array = self.point_cloud[:,2].reshape(width,height).T[::-1]
+        intensity_array = self.intensity_cloud.reshape(width,height).T[::-1]
 
         
             
