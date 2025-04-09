@@ -16,8 +16,8 @@ from scipy.spatial import KDTree
 
 
 class lidar_processor:
-    def __init__(self, file_path, DBSCAN_model_path = None, window_size = 10, upsample_ratio = 2, y_shift = 0, name=None,  
-                strong_PCA_threshold = 0.15, weak_PCA_threshold = 0.025, strong_edge_threshold = 0.25, weak_edge_threshold = 0.075, colourmap = 'binary',
+    def __init__(self, file_path, DBSCAN_model_path = None, window_size = 10, upsample_ratio = 4, y_shift = 0, name=None,  
+                strong_PCA_threshold = 0.15, weak_PCA_threshold = 0.025, strong_edge_threshold = 80, weak_edge_threshold = 30, colourmap = 'binary',
                 x_stop = 550 , box_length = 1500):
         
         if DBSCAN_model_path is None:
@@ -306,8 +306,8 @@ class lidar_processor:
 
     def _create_PCA_mask(self,y_window = 3, x_window = 9, batch_size = 100, **kwargs):
 
-        y_window = int(cp.round(0.75/self.y_pixel_size))
-        x_window = int(cp.round(1.5/self.x_pixel_size))
+        y_window = 9
+        x_window = 2
 
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
@@ -349,10 +349,9 @@ class lidar_processor:
 
                 cov_matrices = cp.einsum('...ik,...jk->...ij', points, points) / (y_range * x_range - 1)
                 evals = cp.linalg.eigvalsh(cov_matrices)
-                e1 = evals[:, :, 0] 
                 e2 = evals[:, :, 1] 
 
-                eigvals[y - y_window:y + batch_size - y_window, x - x_window:x + batch_size - x_window] = e2 * e1
+                eigvals[y - y_window:y + batch_size - y_window, x - x_window:x + batch_size - x_window] = e2 
 
         eigvals = cp.asnumpy(eigvals)
 
@@ -382,33 +381,35 @@ class lidar_processor:
     
     
     def _get_gradient(self):
-
+        array_i = cp.array(np.log(np.abs(self.intensity_cloud)), dtype=cp.float32)
         array_z = cp.array(self.point_cloud, dtype=cp.float32)
-       
-        smooth_y = cp.array([[1.0, 2.0 , 1.0],[3.0, 6.0 , 3.0],[6.0, 12.0, 6.0 ],[9.0, 18.0, 9.0],[6.0 , 12.0 , 6.0],[3.0, 6.0, 3.0 ],[1.0, 2.0 , 1.0]])
-        smooth_y /= cp.sum(smooth_y)
-
-        for i in range(5):
-            array_z = cpconvolve(array_z, smooth_y)
-        
-        sobel_y =  cp.array([[  1,],
-                             [  2,],
-                             [  3,],
-                             [  0,],
-                             [ -3,],
-                             [ -2,],
-                             [ -1,]]) / 6
-           
+        y_values = self.i_to_y_list
+        sobel_y = cp.array([
+                [-20.75,],
+                [ -11.6,],
+                [ -6.27,],
+                [    -2,],
+                [     0,],
+                [     2,],
+                [  6.27,],
+                [  11.6,],
+                [ 20.75,]
+        ])
         sobel_x = sobel_y.T
+
+        y_grad_i = cp.abs(cpconvolve(array_i, sobel_y))
+        x_grad_i = cp.abs(cpconvolve(array_i, sobel_x))
+        magnitude_i = cp.sqrt(x_grad_i**2 + y_grad_i**2)
+        y_grad_i = cp.abs(cpconvolve(array_i, sobel_y))
+        magnitude_i = cp.sqrt(x_grad_i**2 + y_grad_i**2)
 
         x_grad_z = cp.abs(cpconvolve(array_z, sobel_y))
         y_grad_z = cp.abs(cpconvolve(array_z, sobel_x))
+        magnitude_z = cp.sqrt(x_grad_z**2 + y_grad_z**2)
+        y_grad_z = cp.abs(cpconvolve(magnitude_z, sobel_x))
+        magnitude_z = cp.sqrt(x_grad_z**2 + y_grad_z**2)
 
-        x_grad_z = cp.abs(cpconvolve(x_grad_z, sobel_y))
-        y_grad_z = cp.abs(cpconvolve(y_grad_z, sobel_x))
-        magnitude = cp.sqrt(x_grad_z**2 + y_grad_z**2)
-
-        y_values = self.i_to_y_list
+        magnitude = cp.sqrt(magnitude_i * magnitude_z)
 
         y_bottom = np.argmin(np.abs(y_values - self.window_size))
         y_top = np.argmin(np.abs(y_values + self.window_size))
@@ -733,14 +734,14 @@ class lidar_processor:
 
         plt.show()
 
-    def _plot_gradient(self,width = 150, height = 7, dpi = 75, i = 5, **kwargs):
+    def _plot_gradient(self,width = 150, height = 7, dpi = 75, **kwargs):
         changed = False
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
                 changed = True
                 setattr(self, key, value)
         
-        self._get_gradient(i = i)
+        self._get_gradient()
             
         fig, ax = plt.subplots(figsize=(width, height), dpi=dpi)
         ax.imshow(cp.flipud(self.gradient), cmap='nipy_spectral_r', interpolation='nearest', alpha = 1, aspect = 'auto')
@@ -1504,14 +1505,14 @@ class ljx_processor:
 
         plt.show()
 
-    def _plot_gradient(self,width = 150, height = 7, dpi = 75, i = 5, **kwargs):
+    def _plot_gradient(self,width = 150, height = 7, dpi = 75, **kwargs):
         changed = False
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
                 changed = True
                 setattr(self, key, value)
         
-        self._get_gradient(i = i)
+        self._get_gradient()
             
         fig, ax = plt.subplots(figsize=(width, height), dpi=dpi)
         ax.imshow(cp.flipud(self.gradient), cmap='nipy_spectral_r', interpolation='nearest', alpha = 1, aspect = 'auto')
