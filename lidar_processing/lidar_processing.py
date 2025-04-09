@@ -16,7 +16,7 @@ from scipy.spatial import KDTree
 
 
 class lidar_processor:
-    def __init__(self, file_path, DBSCAN_model_path = None, window_size = 10, upsample_ratio = 4, y_shift = 0, name=None,  
+    def __init__(self, file_path, DBSCAN_model_path = None, window_size = 10, upsample_ratio = 2, y_shift = 0, name=None,  
                 strong_PCA_threshold = 0.15, weak_PCA_threshold = 0.025, strong_edge_threshold = 0.25, weak_edge_threshold = 0.075, colourmap = 'binary',
                 x_stop = 550 , box_length = 1500):
         
