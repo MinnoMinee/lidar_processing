@@ -16,16 +16,16 @@ from scipy.spatial import KDTree
 
 
 class lidar_processor:
-    def __init__(self, file_path, DBSCAN_model_path = None, window_size = 10, upsample_ratio = 4, y_shift = 0, name=None,  
+    def __init__(self, file_path, DBSCAN_model_path = None, window_size = 10, upsample_ratio = 2, y_shift = 0, name=None,  
                 strong_PCA_threshold = 0.15, weak_PCA_threshold = 0.025, strong_edge_threshold = 80, weak_edge_threshold = 30, colourmap = 'binary',
-                x_stop = 550 , box_length = 1500):
+                x_stop = 550 , box_length = 1500, xrf_window_size = 10, noise_threshold = 0.25):
         
         if DBSCAN_model_path is None:
             current_dir = os.getcwd()
             self.DBSCAN_model_path = os.path.join(current_dir, 'cluster_kd_tree.pkl')
         else: 
             self.DBSCAN_model_path = DBSCAN_model_path
-            
+             
         self.file_path = file_path
         self.colourmap = colourmap
         self.name = name if name else file_path
@@ -38,17 +38,8 @@ class lidar_processor:
         self.y_shift = y_shift
         self.x_stop = x_stop
         self.x_start = self.x_stop + box_length
-        self.tree = None
-        self.labels = None
-
-        self.correction_windows = None
-        self.labeled_x_values = None   
-
-        self.edge_array = None
-        self.gradient = None
-        self.PCA_mask = None
-        self.y_seed_point = None
-        self.y_offset = None
+        self.noise_threshold = noise_threshold
+        self.xrf_window_size = xrf_window_size
 
         self._build_processor()
     
@@ -227,7 +218,6 @@ class lidar_processor:
         min_intensity = 0
         min_z = 250
         
-
         x_values = np.unique(self.point_cloud[:,0])
         y_values = np.unique(self.point_cloud[:,1]) 
         
@@ -303,11 +293,10 @@ class lidar_processor:
         self.y_pixel_size = np.nanmedian(np.diff(y_values))
         self.x_pixel_size = np.nanmedian(np.diff(x_values))
     
+    def _create_PCA_mask(self, x_window = 9, y_window = 2, batch_size = 100, **kwargs):
 
-    def _create_PCA_mask(self,y_window = 3, x_window = 9, batch_size = 100, **kwargs):
-
-        y_window = 9
-        x_window = 2
+        y_window = int(cp.round(0.75/self.y_pixel_size))
+        x_window = int(cp.round(1.5/self.x_pixel_size))
 
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
@@ -325,6 +314,7 @@ class lidar_processor:
 
         x_n = cp.arange(-x_window, x_window + 1) * self.x_pixel_size
         y_n = cp.arange(-y_window, y_window + 1) * self.y_pixel_size
+
         valid_x = cp.repeat(x_n, y_range).flatten()
         valid_y = cp.tile(y_n, x_range).flatten()
         eigvals = cp.zeros_like(pc) 
@@ -378,8 +368,6 @@ class lidar_processor:
 
         self.PCA_mask = return_array
 
-    
-    
     def _get_gradient(self):
         array_i = cp.array(np.log(np.abs(self.intensity_cloud)), dtype=cp.float32)
         array_z = cp.array(self.point_cloud, dtype=cp.float32)
@@ -424,10 +412,9 @@ class lidar_processor:
             if value is not None and hasattr(self, key):
                 setattr(self, key, value)
 
-        if self.gradient is None:
-            self._get_gradient()
-        if self.PCA_mask is None:
-            self._create_PCA_mask()
+        self._get_gradient()
+
+        self._create_PCA_mask()
 
 
         y_values = self.i_to_y_list
@@ -463,6 +450,7 @@ class lidar_processor:
         self.edge_array = np.where(result_array ==  1, 1 , np.nan)
 
     def _get_props(self, distribution1, distribution2):
+            
             properties = []
             return_properties = []
 
@@ -491,14 +479,11 @@ class lidar_processor:
 
             return return_properties, np.uint8(properties[1] > 0)
         
-    
     def _load_DBSCAN_model(self):
-            if (self.tree is None) or (self.labels is None):
                 with open(self.DBSCAN_model_path, 'rb') as f:
                     self.tree, self.labels = pickle.load(f)
 
-
-    def _define_sections(self, noise_threshold = 0.25,**kwargs):
+    def _define_sections(self, **kwargs):
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
                 setattr(self, key, value)
@@ -553,7 +538,7 @@ class lidar_processor:
                 if not np.any(np.isnan(v)):  
                     dist, ind = self.tree.query([v], k=1)  
 
-                    if dist[0] <= noise_threshold: 
+                    if dist[0] <= self.noise_threshold: 
                         closest_label = self.labels[ind[0]] 
                         
                         if closest_label == 2:
@@ -607,24 +592,24 @@ class lidar_processor:
  
         self.rubble_classifications = results
    
-    def _define_correction_windows(self, xrf_window_size=10,noise_threshold = 0.1, **kwargs):
+    def _define_correction_windows(self, **kwargs):
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
                 setattr(self, key, value)
 
-        self._define_sections(noise_threshold=noise_threshold)
+        self._define_sections()
         self._classify_rubble()
 
         windows = {}
 
-        for x_start in np.arange(0, np.nanmax(self.i_to_x_list), xrf_window_size):
+        for x_start in np.arange(0, np.nanmax(self.i_to_x_list), self.xrf_window_size):
             values = [self.rubble_classifications[i] for i, x in zip(self.i_to_x_list, self.i_to_x_list) 
-            if x_start <= x < x_start + xrf_window_size]
+            if x_start <= x < x_start + self.xrf_window_size]
             if values:
                 values = np.array(values)
         
-                x_end = max(x for x in self.i_to_x_list if x_start <= x < x_start + xrf_window_size)
-                x_start = min(x for x in self.i_to_x_list if x_start <= x < x_start + xrf_window_size)
+                x_end = max(x for x in self.i_to_x_list if x_start <= x < x_start + self.xrf_window_size)
+                x_start = min(x for x in self.i_to_x_list if x_start <= x < x_start + self.xrf_window_size)
             
                 
                 half_perc = np.sum(values[:,0] == 1) / len(values)
@@ -641,13 +626,12 @@ class lidar_processor:
 
         self.correction_windows = windows
 
-    def _save_correction_windows(self, xrf_window_size=10, noise_threshold = 0.1, **kwargs):
+    def _save_correction_windows(self, **kwargs):
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
                 setattr(self, key, value)
-
-        if self.correction_windows == None:
-            self._define_correction_windows(xrf_window_size, noise_threshold=noise_threshold)
+        
+        self._define_correction_windows()
         
         os.makedirs(self.file_path, exist_ok=True)
         
@@ -656,14 +640,13 @@ class lidar_processor:
         with open(file_path, 'wb') as f:
             pickle.dump(self.correction_windows, f)
 
-    def _plot_correction_windows(self, width = 150, height = 7, dpi = 75, noise_threshold = 0.1, plot_point_cloud = False, xrf_window_size=10,**kwargs):
+    def _plot_correction_windows(self, width = 150, height = 7, dpi = 75, plot_point_cloud = False, **kwargs):
         
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
-                changed = True
                 setattr(self, key, value)
 
-        self._define_correction_windows(xrf_window_size=xrf_window_size, noise_threshold=noise_threshold)
+        self._define_correction_windows()
 
 
         fig, ax = plt.subplots(figsize=(width, height), dpi=dpi)
@@ -735,10 +718,9 @@ class lidar_processor:
         plt.show()
 
     def _plot_gradient(self,width = 150, height = 7, dpi = 75, **kwargs):
-        changed = False
+
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
-                changed = True
                 setattr(self, key, value)
         
         self._get_gradient()
@@ -751,14 +733,12 @@ class lidar_processor:
         plt.show()
     
     def _plot_edges(self,width = 150, height = 7, dpi = 75, **kwargs):
-        changed = False
+
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
-                changed = True
                 setattr(self, key, value)
 
-        if self.edge_array is None or changed:
-            self._create_edge_array()
+        self._create_edge_array()
             
         fig, ax = plt.subplots(figsize=(width, height), dpi=dpi)
         ax.imshow(cp.flipud(self.edge_array), cmap='nipy_spectral', interpolation='nearest', alpha = 1, aspect = 'auto')
@@ -769,15 +749,14 @@ class lidar_processor:
 
     def _plot_PCA_mask(self, width = 150, height = 7, dpi = 75, **kwargs):
 
-        changed = False
-
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
-                changed = True
                 setattr(self, key, value)
 
-        if self.PCA_mask is None or changed:
-            self._create_PCA_mask()
+
+
+        self._create_PCA_mask()
+
         fig, ax = plt.subplots(figsize=(width, height), dpi=dpi)
         a = 1
 
@@ -787,17 +766,14 @@ class lidar_processor:
         ax.set_title(self.name)
         plt.show()
 
-    def _plot_sections(self,plot_point_cloud = False, plot_intensity_cloud = True, width = 150, height = 7, dpi = 75, **kwargs):
-
-        changed = False
+    def _plot_sections(self, plot_point_cloud = False, plot_intensity_cloud = True, width = 150, height = 7, dpi = 75, **kwargs):
 
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
-                changed = True
                 setattr(self, key, value)
 
-        if self.edge_array is None or changed:
-            self._create_edge_array()
+        self._create_edge_array()
+        
         sections = self.edge_array.copy()
     
         neighbours = [(-1, 0), (0, -1), (0, 1), (1, 0)]  
@@ -825,18 +801,21 @@ class lidar_processor:
         a = 1
         if plot_point_cloud:
             ax.imshow(cp.flipud(self.point_cloud), cmap=self.colourmap, interpolation='nearest', alpha = 1, aspect= 'auto')
-            a = 0.8
+            a = 0.5
         if plot_intensity_cloud:
-            ax.imshow(cp.flipud(self.intensity_cloud), cmap=self.colourmap, interpolation='nearest', alpha = 0.8, aspect= 'auto')
-        ax.imshow(cp.flipud(sections), cmap='cool', interpolation='nearest', alpha = a, aspect= 'auto')
+            ax.imshow(cp.flipud(self.intensity_cloud), cmap=self.colourmap, interpolation='nearest', alpha = 1, aspect= 'auto')
+            a = 0.5
+        ax.imshow(cp.flipud(sections), cmap='nipy_spectral', interpolation='nearest', alpha = a, aspect= 'auto')
         ax.set_xlabel("X index")
         ax.set_ylabel("Y index")
         ax.set_title(self.name)
         plt.show()
 
     def _view_point_cloud(self, intensity_cloud = False):
+
         x = (list)(self.i_to_x_list) * len(self.i_to_y_list)
         y = np.repeat(self.i_to_y_list, len(self.i_to_x_list))
+
         if intensity_cloud:
             z  = self.intensity_cloud.flatten()
         else:
@@ -848,31 +827,28 @@ class lidar_processor:
         
         o3d.visualization.draw_geometries([pcd])
 
-    def _plot_point_cloud(self,width = 150, height = 7, dpi = 75, **kwargs):
-        for key, value in kwargs.items():
-            if value is not None and hasattr(self, key):
-                setattr(self, key, value)
+    def _plot_point_cloud(self,width = 150, height = 7, dpi = 75):
 
         fig, ax = plt.subplots(figsize=(width, height), dpi=dpi)
         ax.imshow(cp.flipud(self.point_cloud), cmap=self.colourmap, interpolation='nearest', alpha = 1, aspect = 'auto')
         ax.set_xlabel("X index")
         ax.set_ylabel("Y index")
         ax.set_title(self.name)
+
         plt.show()
 
-    def _plot_intensity_cloud(self,width = 150, height = 7, dpi = 75, **kwargs):
-        for key, value in kwargs.items():
-            if value is not None and hasattr(self, key):
-                setattr(self, key, value)
+    def _plot_intensity_cloud(self,width = 150, height = 7, dpi = 75):
 
         fig, ax = plt.subplots(figsize=(width, height), dpi=dpi)
         ax.imshow(cp.flipud(self.intensity_cloud), cmap=self.colourmap, interpolation='nearest', alpha = 1, aspect = 'auto')
         ax.set_xlabel("X index")
         ax.set_ylabel("Y index")
         ax.set_title(self.name)
+
         plt.show()
 
     def _get_data_cube(self):
+
         x = (list)(self.i_to_x_list) * len(self.i_to_y_list)
         y = np.repeat(self.i_to_y_list, len(self.i_to_x_list))
         z = self.point_cloud.flatten()
@@ -880,6 +856,7 @@ class lidar_processor:
         return np.column_stack((x, y, z))
 
     def _save_to_las(self):
+
         x = (list)(self.i_to_x_list) * len(self.i_to_y_list)
         y = np.repeat(self.i_to_y_list, len(self.i_to_x_list))
         z = self.point_cloud.flatten()
