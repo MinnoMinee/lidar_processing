@@ -916,7 +916,7 @@ class lidar_processor:
 
 class ljx_processor:
     def __init__(self, file_path, DBSCAN_model_path = None, window_size = 10, y_shift = 0, name=None,  
-                strong_PCA_threshold = 0.15, weak_PCA_threshold = 0.025, strong_edge_threshold = 0.25, weak_edge_threshold = 0.075, 
+                strong_PCA_threshold = 0.15, weak_PCA_threshold = 0.025, weak_edge_threshold = 0.1, strong_edge_threshold = 0.75, 
                 colourmap = 'binary_r', x_stop = 550 , box_length = 1500):
         
         if DBSCAN_model_path is None:
@@ -1170,15 +1170,29 @@ class ljx_processor:
                              [ -3,],
                              [ -2,],
                              [ -1,]]) / 6
+        
+
            
         sobel_x = sobel_y.T
+
+        v_edge = cp.array([[1,0,-1]])
 
         x_grad_z = cp.abs(cpconvolve(array_z, sobel_y))
         y_grad_z = cp.abs(cpconvolve(array_z, sobel_x))
 
         x_grad_z = cp.abs(cpconvolve(x_grad_z, sobel_y))
         y_grad_z = cp.abs(cpconvolve(y_grad_z, sobel_x))
-        magnitude = cp.sqrt(x_grad_z**2 + y_grad_z**2)
+
+
+        magnitude0 = cp.sqrt(x_grad_z**2 + y_grad_z**2)
+
+        smooth_x = smooth_y.T
+
+        for i in range(5):
+            array_z = cpconvolve(array_z, smooth_x)
+
+        magnitude = cp.abs(cpconvolve(array_z, v_edge)) 
+        magnitude = cp.abs(cpconvolve(magnitude, v_edge)) + magnitude0
 
         y_values = self.i_to_y_list
 
@@ -1269,7 +1283,7 @@ class ljx_processor:
                     self.tree, self.labels = pickle.load(f)
 
 
-    def _define_sections(self, noise_threshold = 0.25,**kwargs):
+    def _define_sections(self, noise_threshold = 0.1,**kwargs):
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
                 setattr(self, key, value)
@@ -1316,8 +1330,8 @@ class ljx_processor:
                         nan_mask[ny, nx] = False
             
             if size > 5000:
-                avg_z_vals = [np.nanmedian(z_values) for z_values in avg_z_vals.values()]
-                avg_cz_vals = [np.nanmedian(z_values) for z_values in avg_cz_vals.values()]
+                avg_z_vals = [np.nanmean(z_values) for z_values in avg_z_vals.values()]
+                avg_cz_vals = [np.nanmean(z_values) for z_values in avg_cz_vals.values()]
 
                 v,b = self._get_props(avg_z_vals,avg_cz_vals)
                 closest_label = 0
@@ -1515,7 +1529,7 @@ class ljx_processor:
         self._get_gradient()
             
         fig, ax = plt.subplots(figsize=(width, height), dpi=dpi)
-        ax.imshow(cp.flipud(self.gradient), cmap='nipy_spectral_r', interpolation='nearest', alpha = 1, aspect = 'auto')
+        ax.imshow(cp.flipud(np.sqrt(self.gradient)), cmap='nipy_spectral_r', interpolation='nearest', alpha = 1, aspect = 'auto')
         ax.set_xlabel("X index",fontsize = 20)
         ax.set_ylabel("Y index",fontsize = 20)
         ax.set_title(self.name, fontsize=35)
