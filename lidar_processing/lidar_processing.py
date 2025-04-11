@@ -894,7 +894,7 @@ class lidar_processor:
 class ljx_processor:
     def __init__(self, file_path, DBSCAN_model_path = None, window_size = 10, y_shift = 0, name=None,  
                 strong_PCA_threshold = 0.15, weak_PCA_threshold = 0.025, weak_edge_threshold = 0.1, strong_edge_threshold = 0.75, 
-                colourmap = 'binary_r', x_stop = 550 , box_length = 1500, noise_threshold = 0.25):
+                colourmap = 'binary_r', x_stop = 550 , box_length = 1500, noise_threshold = 0.25, xrf_window_size = 10):
         
         if DBSCAN_model_path is None:
             current_dir = os.getcwd()
@@ -914,6 +914,7 @@ class ljx_processor:
         self.x_stop = x_stop
         self.x_start = self.x_stop + box_length
         self.noise_threshold = noise_threshold 
+        self.xrf_window_size = 10
         self.tree = None
         self.labels = None
 
