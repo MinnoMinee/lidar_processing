@@ -891,10 +891,45 @@ class lidar_processor:
         print(f" z value range: {data[6]}mm to {data[7]}mm, total number of points: {data[8]}")
         print(f"pixel size: {self.x_pixel_size}mm in the x direction, {self.y_pixel_size}mm in the y direction")
 
+    def _get_moment_space(self, **kwargs):
+        for key, value in kwargs.items():
+            if value is not None and hasattr(self, key):
+                setattr(self, key, value)
+
+        vectors = []
+        
+
+        y_bottom = np.argmin(np.abs(self.i_to_y_list + self.window_size))
+        y_top = np.argmin(np.abs(self.i_to_y_list - self.window_size))
+        
+        y_bottom, y_top = sorted((y_bottom, y_top))
+        
+        convolved_point_cloud = convolve(self.point_cloud,np.array([[-1],[-2],[0],[2],[1]])) 
+        
+        for i in range(self.point_cloud.shape[1]):
+
+            distribution = self.point_cloud[y_bottom:y_top,i]
+
+            convolved_distribution = convolved_point_cloud[y_bottom:y_top,i]
+
+            vector = self._get_props(distribution,convolved_distribution)
+
+            if vector[1] == 0:
+                vector[0][2] *= -1
+
+            if not np.any(np.isnan(vector[0])):
+                vectors.append(vector[0])
+        
+
+        return vectors
+
+
+        
+
 class ljx_processor:
     def __init__(self, file_path, DBSCAN_model_path = None, window_size = 10, y_shift = 0, name=None,  
                 strong_PCA_threshold = 0.15, weak_PCA_threshold = 0.025, weak_edge_threshold = 0.1, strong_edge_threshold = 0.75, 
-                colourmap = 'binary_r', x_stop = 550 , box_length = 1500, noise_threshold = 0.25, xrf_window_size = 10):
+                colourmap = 'binary_r', x_stop = 550 , box_length = 1500):
         
         if DBSCAN_model_path is None:
             current_dir = os.getcwd()
@@ -913,10 +948,16 @@ class ljx_processor:
         self.y_shift = y_shift
         self.x_stop = x_stop
         self.x_start = self.x_stop + box_length
-        self.noise_threshold = noise_threshold 
-        self.xrf_window_size = 10
         self.tree = None
         self.labels = None
+
+        self.correction_windows = None
+        self.labeled_x_values = None   
+
+        self.edge_array = None
+        self.gradient = None
+        self.PCA_mask = None
+        self.y_seed_point = None
 
         self._build_processor()
     
@@ -1656,3 +1697,35 @@ class ljx_processor:
         print(f" y value range: {data[3]}mm to {data[4]}mm, number of lines in the y direction: {data[5]}")
         print(f" z value range: {data[6]}mm to {data[7]}mm, total number of points: {data[8]}")
         print(f"pixel size: {self.x_pixel_size}mm in the x direction, {self.y_pixel_size}mm in the y direction")
+
+    def _get_moment_space(self, **kwargs):
+        for key, value in kwargs.items():
+            if value is not None and hasattr(self, key):
+                setattr(self, key, value)
+
+        vectors = []
+        
+
+        y_bottom = np.argmin(np.abs(self.i_to_y_list + self.window_size))
+        y_top = np.argmin(np.abs(self.i_to_y_list - self.window_size))
+        
+        y_bottom, y_top = sorted((y_bottom, y_top))
+        
+        convolved_point_cloud = convolve(self.point_cloud,np.array([[-1],[-2],[0],[2],[1]])) 
+        
+        for i in range(self.point_cloud.shape[1]):
+
+            distribution = self.point_cloud[y_bottom:y_top,i]
+
+            convolved_distribution = convolved_point_cloud[y_bottom:y_top,i]
+
+            vector = self._get_props(distribution,convolved_distribution)
+
+            if vector[1] == 0:
+                vector[0][2] *= -1
+
+            if not np.any(np.isnan(vector[0])):
+                vectors.append(vector[0])
+        
+
+        return vectors
