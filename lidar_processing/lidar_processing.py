@@ -7,18 +7,15 @@ import numpy                as np
 import cupy                 as cp
 import open3d               as o3d
 from scipy.stats            import skew, kurtosis
-from scipy.ndimage          import convolve
+from scipy.ndimage          import convolve, label
 from cupyx.scipy.ndimage    import convolve as cpconvolve
 from collections            import deque
 from scipy.interpolate      import interp1d
 from scipy.spatial import KDTree
-
-
-
 class lidar_processor:
     def __init__(self, file_path, DBSCAN_model_path = None, window_size = 10, upsample_ratio = 2, y_shift = 0, name=None,  
                 strong_PCA_threshold = 0.15, weak_PCA_threshold = 0.025, strong_edge_threshold = 80, weak_edge_threshold = 30, colourmap = 'binary',
-                x_stop = 550 , box_length = 1500, xrf_window_size = 10, noise_threshold = 0.25):
+                x_stop = 550 , box_length = 1500, xrf_window_size = 10, noise_threshold = 0.1):
         
         if DBSCAN_model_path is None:
             current_dir = os.getcwd()
@@ -491,60 +488,59 @@ class lidar_processor:
         self._load_DBSCAN_model()
         self._create_edge_array()
 
-        convolved_point_cloud = convolve(self.point_cloud,np.array([[-1],[-2],[0],[2],[1]]))
-        neighbours = [(-1, 0), (0, -1), (0, 1), (1, 0)]
-        nan_mask = np.isnan(self.edge_array) 
-        
+        kernel = np.array([[-1], [-2], [0], [2], [1]])
+        convolved_point_cloud = convolve(self.point_cloud, kernel)
+
+        nan_mask = np.isnan(self.edge_array)
+        structure = np.array([[0,1,0],
+                            [1,1,1],
+                            [0,1,0]])  
+        labeled_mask, num_regions = label(nan_mask, structure=structure)
+
         self.labeled_x_values = np.zeros(self.point_cloud.shape[1], dtype=int)
 
-        for x in range(self.edge_array.shape[1]):
-            center_x_vals = []
-            avg_z_vals = {}
-            avg_cz_vals = {}
-            size = 0
-            if nan_mask[self.y_seed_point, x]: 
-                queue = deque([(self.y_seed_point, x)])
-                while queue:
-                    y, x = queue.popleft()
-                    size += 1
+        for region_id in range(1, num_regions + 1):
+            region_mask = labeled_mask == region_id
+            ys, xs = np.where(region_mask)
 
-                    if y == self.y_seed_point:
-                        center_x_vals.append(x)
-
-                    if y not in avg_z_vals.keys():
-                        avg_z_vals[y] = []
-                        avg_cz_vals[y] = []
-
-                    avg_z_vals[y].append(self.point_cloud[y,x])
-                    avg_cz_vals[y].append(convolved_point_cloud[y,x])
-                    nan_mask[y, x] = False  
-
-                    neighbors_to_add = [
-                        (ny, nx) for dy, dx in neighbours
-                        if (0 <= (ny := y + dy) < self.edge_array.shape[0] and 
-                            0 <= (nx := x + dx) < self.edge_array.shape[1] and 
-                            nan_mask[ny, nx])  
-                    ]
-                    queue.extend(neighbors_to_add) 
-                    for ny, nx in neighbors_to_add:
-                        nan_mask[ny, nx] = False
+            if not np.any(ys == self.y_seed_point):
+                continue
             
-            if size > 5000:
-                avg_z_vals = [np.nanmedian(z_values) for z_values in avg_z_vals.values()]
-                avg_cz_vals = [np.nanmedian(z_values) for z_values in avg_cz_vals.values()]
+            center_x_vals = xs[ys == self.y_seed_point]
 
-                v,b = self._get_props(avg_z_vals,avg_cz_vals)
-                closest_label = 0
-                if not np.any(np.isnan(v)):  
-                    dist, ind = self.tree.query([v], k=1)  
+            vectors = []
+            skew = 0
 
-                    if dist[0] <= self.noise_threshold: 
-                        closest_label = self.labels[ind[0]] 
-                        
-                        if closest_label == 2:
-                            closest_label += b
-                for x in center_x_vals:
-                    self.labeled_x_values[x] = closest_label
+            for cx in center_x_vals:
+                mask = xs == cx
+                ys_at_x = ys[mask]
+
+                if ys_at_x.size == 0:
+                    continue
+
+                z = self.point_cloud[ys_at_x, cx]
+                cz = convolved_point_cloud[ys_at_x, cx]
+
+                v = self._get_props(z, cz)
+                vectors.append(v[0])
+                skew += 1 if v[1] else -1
+
+            if not vectors:
+                continue
+
+            v = np.mean(vectors, axis=0, keepdims=True)
+            b = skew > 0
+            closest_label = 0
+
+            if not np.any(np.isnan(v)):
+                dist, ind = self.tree.query([v], k=1)
+                if dist[0] <= self.noise_threshold:
+                    closest_label = self.labels[ind[0]]
+                    if closest_label == 2:
+                        closest_label += b
+
+            for cx in center_x_vals:
+                self.labeled_x_values[cx] = closest_label
 
     def _classify_rubble(self, x_window= 5, y_window=4, **kwargs):
         for key, value in kwargs.items():
@@ -922,14 +918,10 @@ class lidar_processor:
         
 
         return vectors
-
-
-        
-
 class ljx_processor:
     def __init__(self, file_path, DBSCAN_model_path = None, window_size = 10, y_shift = 0, name=None,  
                 strong_PCA_threshold = 0.15, weak_PCA_threshold = 0.025, weak_edge_threshold = 0.1, strong_edge_threshold = 0.75, 
-                colourmap = 'binary_r', x_stop = 550 , box_length = 1500):
+                colourmap = 'binary_r', x_stop = 550 , box_length = 1500, xrf_window_size = 10, noise_threshold = 0.1):
         
         if DBSCAN_model_path is None:
             current_dir = os.getcwd()
@@ -948,6 +940,8 @@ class ljx_processor:
         self.y_shift = y_shift
         self.x_stop = x_stop
         self.x_start = self.x_stop + box_length
+        self.noise_threshold = noise_threshold
+        self.xrf_window_size = xrf_window_size
         self.tree = None
         self.labels = None
 
@@ -1298,61 +1292,60 @@ class ljx_processor:
         self._load_DBSCAN_model()
         self._create_edge_array()
 
-        convolved_point_cloud = convolve(self.point_cloud,np.array([[-1],[-2],[0],[2],[1]]))
-        neighbours = [(-1, 0), (0, -1), (0, 1), (1, 0)]
-        nan_mask = np.isnan(self.edge_array) 
-        
+        kernel = np.array([[-1], [-2], [0], [2], [1]])
+        convolved_point_cloud = convolve(self.point_cloud, kernel)
+
+        nan_mask = np.isnan(self.edge_array)
+        structure = np.array([[0,1,0],
+                            [1,1,1],
+                            [0,1,0]])  
+        labeled_mask, num_regions = label(nan_mask, structure=structure)
+
         self.labeled_x_values = np.zeros(self.point_cloud.shape[1], dtype=int)
 
-        for x in range(self.edge_array.shape[1]):
-            center_x_vals = []
-            avg_z_vals = {}
-            avg_cz_vals = {}
-            size = 0
-            if nan_mask[self.y_seed_point, x]: 
-                queue = deque([(self.y_seed_point, x)])
-                while queue:
-                    y, x = queue.popleft()
-                    size += 1
+        for region_id in range(1, num_regions + 1):
+            region_mask = labeled_mask == region_id
+            ys, xs = np.where(region_mask)
 
-                    if y == self.y_seed_point:
-                        center_x_vals.append(x)
-
-                    if y not in avg_z_vals.keys():
-                        avg_z_vals[y] = []
-                        avg_cz_vals[y] = []
-
-                    avg_z_vals[y].append(self.point_cloud[y,x])
-                    avg_cz_vals[y].append(convolved_point_cloud[y,x])
-                    nan_mask[y, x] = False  
-
-                    neighbors_to_add = [
-                        (ny, nx) for dy, dx in neighbours
-                        if (0 <= (ny := y + dy) < self.edge_array.shape[0] and 
-                            0 <= (nx := x + dx) < self.edge_array.shape[1] and 
-                            nan_mask[ny, nx])  
-                    ]
-                    queue.extend(neighbors_to_add) 
-                    for ny, nx in neighbors_to_add:
-                        nan_mask[ny, nx] = False
+            if not np.any(ys == self.y_seed_point):
+                continue
             
-            if size > 5000:
-                avg_z_vals = [np.nanmedian(z_values) for z_values in avg_z_vals.values()]
-                avg_cz_vals = [np.nanmedian(z_values) for z_values in avg_cz_vals.values()]
+            center_x_vals = xs[ys == self.y_seed_point]
 
-                v,b = self._get_props(avg_z_vals,avg_cz_vals)
-                closest_label = 0
-                if not np.any(np.isnan(v)):  
-                    dist, ind = self.tree.query([v], k=1)  
+            vectors = []
+            skew = 0
 
-                    if dist[0] <= self.noise_threshold: 
-                        closest_label = self.labels[ind[0]] 
-                        
-                        if closest_label == 2:
-                            closest_label += b
-                for x in center_x_vals:
-                    self.labeled_x_values[x] = closest_label
+            for cx in center_x_vals:
+                mask = xs == cx
+                ys_at_x = ys[mask]
 
+                if ys_at_x.size == 0:
+                    continue
+
+                z = self.point_cloud[ys_at_x, cx]
+                cz = convolved_point_cloud[ys_at_x, cx]
+
+                v = self._get_props(z, cz)
+                vectors.append(v[0])
+                skew += 1 if v[1] else -1
+
+            if not vectors:
+                continue
+
+            v = np.mean(vectors, axis=0, keepdims=True)
+            b = skew > 0
+            closest_label = 0
+
+            if not np.any(np.isnan(v)):
+                dist, ind = self.tree.query([v], k=1)
+                if dist[0] <= self.noise_threshold:
+                    closest_label = self.labels[ind[0]]
+                    if closest_label == 2:
+                        closest_label += b
+
+            for cx in center_x_vals:
+                self.labeled_x_values[cx] = closest_label
+                
     def _classify_rubble(self, x_window= 5, y_window=4, **kwargs):
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
