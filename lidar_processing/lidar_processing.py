@@ -446,12 +446,12 @@ class lidar_processor:
 
         self.edge_array = np.where(result_array ==  1, 1 , np.nan)
 
-    def _get_props(self, distribution1, distribution2):
+    def _get_props(self, distribution1, distribution2,window_size):
             
             properties = []
             return_properties = []
 
-            variance =  np.var(distribution1) *((10/self.window_size)**2)
+            variance =  np.var(distribution1) *((10/window_size)**2)
             skw = skew(distribution1)
             kurt = kurtosis(distribution1)
             mean = np.sqrt(np.mean(np.abs(distribution2)))
@@ -520,8 +520,12 @@ class lidar_processor:
 
                 z = self.point_cloud[ys_at_x, cx]
                 cz = convolved_point_cloud[ys_at_x, cx]
+                max_y = self.i_to_y_list(np.max(ys_at_x))
+                min_y = self.i_to_y_list(np.min(ys_at_x))
+                window_size = np.abs(max_y-min_y)
 
-                v = self._get_props(z, cz)
+        
+                v = self._get_props(z, cz, window_size)
                 vectors.append(v[0])
                 skew += 1 if v[1] else -1
 
@@ -918,6 +922,7 @@ class lidar_processor:
         
 
         return vectors
+
 class ljx_processor:
     def __init__(self, file_path, DBSCAN_model_path = None, window_size = 10, y_shift = 0, name=None,  
                 strong_PCA_threshold = 0.15, weak_PCA_threshold = 0.025, weak_edge_threshold = 0.1, strong_edge_threshold = 0.75, 
@@ -1250,12 +1255,12 @@ class ljx_processor:
 
         self.edge_array = np.where(result_array ==  1, 1 , np.nan)
 
-    def _get_props(self, distribution1, distribution2):
+    def _get_props(self, distribution1, distribution2,window_size):
             
             properties = []
             return_properties = []
 
-            variance =  np.var(distribution1) *((10/self.window_size)**2)
+            variance =  np.var(distribution1) *((10/window_size)**2)
             skw = skew(distribution1)
             kurt = kurtosis(distribution1)
             mean = np.sqrt(np.mean(np.abs(distribution2)))
@@ -1324,8 +1329,12 @@ class ljx_processor:
 
                 z = self.point_cloud[ys_at_x, cx]
                 cz = convolved_point_cloud[ys_at_x, cx]
+                max_y = self.i_to_y_list(np.max(ys_at_x))
+                min_y = self.i_to_y_list(np.min(ys_at_x))
+                window_size = np.abs(max_y-min_y)
 
-                v = self._get_props(z, cz)
+        
+                v = self._get_props(z, cz, window_size)
                 vectors.append(v[0])
                 skew += 1 if v[1] else -1
 
