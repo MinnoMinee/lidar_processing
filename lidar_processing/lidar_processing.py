@@ -520,9 +520,9 @@ class lidar_processor:
 
                 z = self.point_cloud[ys_at_x, cx]
                 cz = convolved_point_cloud[ys_at_x, cx]
-                max_y = self.i_to_y_list(np.max(ys_at_x))
-                min_y = self.i_to_y_list(np.min(ys_at_x))
-                window_size = np.abs(max_y-min_y)
+                max_y = self.i_to_y_list[np.max(ys_at_x)]
+                min_y = self.i_to_y_list[np.min(ys_at_x)]
+                window_size = np.abs(max_y-min_y)/2
 
         
                 v = self._get_props(z, cz, window_size)
@@ -1329,9 +1329,9 @@ class ljx_processor:
 
                 z = self.point_cloud[ys_at_x, cx]
                 cz = convolved_point_cloud[ys_at_x, cx]
-                max_y = self.i_to_y_list(np.max(ys_at_x))
-                min_y = self.i_to_y_list(np.min(ys_at_x))
-                window_size = np.abs(max_y-min_y)
+                max_y = self.i_to_y_list[np.max(ys_at_x)]
+                min_y = self.i_to_y_list[np.min(ys_at_x)]
+                window_size = np.abs(max_y-min_y)/2
 
         
                 v = self._get_props(z, cz, window_size)
