@@ -532,7 +532,7 @@ class lidar_processor:
             if not vectors:
                 continue
 
-            v = np.mean(vectors, axis=0, keepdims=True)
+            v = np.median(vectors, axis=0, keepdims=True)
             b = skew > 0
             closest_label = 0
 
@@ -1341,7 +1341,7 @@ class ljx_processor:
             if not vectors:
                 continue
 
-            v = np.mean(vectors, axis=0, keepdims=True)
+            v = np.median(vectors, axis=0, keepdims=True)
             b = skew > 0
             closest_label = 0
 
