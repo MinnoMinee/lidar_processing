@@ -912,7 +912,7 @@ class lidar_processor:
 
             convolved_distribution = convolved_point_cloud[y_bottom:y_top,i]
 
-            vector = self._get_props(distribution,convolved_distribution)
+            vector = self._get_props(distribution,convolved_distribution,self.window_size)
 
             if vector[1] == 0:
                 vector[0][2] *= -1
