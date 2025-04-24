@@ -13,6 +13,14 @@ from collections            import deque
 from scipy.interpolate      import interp1d
 from scipy.spatial import KDTree
 class lidar_processor:
+    
+
+    #   window_size should be proportionl to the core diameter the window should be around 4/10ths of the core diameter
+    #   the upsample ratio can be changed, but the edge detection and PCA mask may not work as well
+    #   x_stop and box_length will be used to trim the cloud only if there is no xrf start stop values in the component_parameters file (this should maybe be changed so you can always change how the cloud is trimmed)
+    #   the xrf_window_size is the size of the window where classifications and parameters(variance, x_angle, y_angle) are calculated
+    #   the noise threshold is the distance from the nearest cluster that will be considered noise
+    #   the strong and weak thresholds are all used for hysterisis during sectioning, they should be changed in order to change the sensitivity of edge detection. 
     def __init__(self, file_path, DBSCAN_model_path = None, window_size = 10, upsample_ratio = 2, y_shift = 0, name=None,  
                 strong_PCA_threshold = 0.15, weak_PCA_threshold = 0.025, strong_edge_threshold = 80, weak_edge_threshold = 30, colourmap = 'binary',
                 x_stop = 550 , box_length = 1500, xrf_window_size = 10, noise_threshold = 0.1):
@@ -39,7 +47,9 @@ class lidar_processor:
         self.xrf_window_size = xrf_window_size
 
         self._build_processor()
+
     
+    #not essential, but will free up memory if you are done with a processor, and still let you run each function (besides build processor) 
     def _collect_garbage(self):
         self.tree = None
         self.labels = None
@@ -53,6 +63,8 @@ class lidar_processor:
         self.intensity_path = None
         self.real_dbg_path = None
         self.lidar_dbg_path = None
+
+    #finds the needed files to build a lidar processor in a directory
 
     def _find_files(self):
         self.component_parameters_path = None
@@ -76,6 +88,8 @@ class lidar_processor:
             elif file_name.endswith(".dbg"):
                 self.lidar_dbg_path = full_path
 
+    # this will return an error if any of the required files are missing
+    # if the dpp was not enabled (or some non essential files are missing) for a scan it will print the name of the files it assumes the content of
     def _validate_files(self):
         missing_files = [
             name for name, path in {
@@ -98,6 +112,7 @@ class lidar_processor:
         if non_essential_mising_files:
             print (f"   Missing: {', '.join(non_essential_mising_files)}, contents will be assumed")
     
+    # interpolates the x positions of the lidar data assuming a constant table velocity for the majority of the scan (barring the start and end to account for acceleration and deceleration)
     def _interpolate_x_positions(self):
         with open(self.real_dbg_path) as file:
             lines = file.readlines()
@@ -152,15 +167,15 @@ class lidar_processor:
         lidar_timestamps = np.array(lidar_timestamps)
         ordered_timestamps -= min_t
 
-        ordered_timestamps = np.concatenate([ordered_timestamps[:2], ordered_timestamps[-2:]])
+        ordered_timestamps = np.concatenate([ordered_timestamps[:2], ordered_timestamps[-2:]]) #change these values in order to change the range of interpolation, for example increase them if it seems to be assuming constant velocity while the table is accelerating or decelerating
         ordered_positions = np.concatenate([ordered_positions[:2], ordered_positions[-2:]])
 
         interp_func = interp1d(ordered_timestamps, ordered_positions, kind="linear", fill_value="extrapolate", bounds_error=False) 
 
         self.interpolated_x_values = interp_func(lidar_timestamps)
 
+    # get the limits of the xrf scan, if the component paramters doesnt include XRAY_DPP it will assume the x_start and x_stop values or they can be set with box length and x_stop during initialization
     def _load_component_parameters(self):
-        self.y_offset = 0
         if self.component_parameters_path is not None:
             with open(self.component_parameters_path) as file:
                 lines = file.readlines()
@@ -169,36 +184,38 @@ class lidar_processor:
                         self.x_start = float(line.split(":")[1].strip())
                     if "XRAY_DPP[Acquisition]#0.X.Stop:" in line:
                         self.x_stop = float(line.split(":")[1].strip())
-                    if "XRAY_DPP[Acquisition]#0.Y.Start:" in line:
-                        self.y_offset = float(line.split(":")[1].strip())
     
+    #uses a default matrix if the lidar2xrf file is not present, otherwise it loads the matrix from the file
+    #loads both the bpc and intensity files, applies the matrix and stores the point cloud and intensity cloud limits 
     def _load_lidar_data(self):
         if self.lidar2xrf_path is None:
-            self.transformation_matrix = np.array([[1,0,0,192],
+            self.transformation_matrix = cp.array([[1,0,0,192],
                                                   [0,-1,0,9.3],
                                                   [0,0,-1,53.8],
                                                   [0,0,0,1]])
         else: 
             with open(self.lidar2xrf_path) as file:
                 lines = file.readlines()
-                self.transformation_matrix = np.array([list(map(float, line.strip().split(","))) for line in lines])
+                self.transformation_matrix = cp.array([list(map(float, line.strip().split(","))) for line in lines])
 
-        self.point_cloud = np.fromfile(self.bpc_path, dtype=np.float32).reshape(-1, 3)
+        self.point_cloud = cp.fromfile(self.bpc_path, dtype=cp.float32).reshape(-1, 3)
         intensity_values = cv2.imread(self.intensity_path, cv2.IMREAD_ANYDEPTH)
-        intensity_values = np.reshape(intensity_values,(-1,1))
+        intensity_values = cp.reshape(intensity_values,(-1,1))
 
-        self.original_cloud_limits = [np.nanmax(self.point_cloud[:,0]),np.nanmin(self.point_cloud[:,0]), len(np.unique(self.point_cloud[:,0])),
-                                      np.nanmax(self.point_cloud[:,1]),np.nanmin(self.point_cloud[:,1]), len(np.unique(self.point_cloud[:,1])),
-                                      np.nanmax(self.point_cloud[:,2]),np.nanmin(self.point_cloud[:,2]), len(self.point_cloud[:,2])]
+        self.original_cloud_limits = [cp.nanmax(self.point_cloud[:,0]),cp.nanmin(self.point_cloud[:,0]), len(cp.unique(self.point_cloud[:,0])),
+                                      cp.nanmax(self.point_cloud[:,1]),cp.nanmin(self.point_cloud[:,1]), len(cp.unique(self.point_cloud[:,1])),
+                                      cp.nanmax(self.point_cloud[:,2]),cp.nanmin(self.point_cloud[:,2]), len(self.point_cloud[:,2])]
 
-        self.intensity_cloud = np.hstack((self.point_cloud[:,:2], intensity_values))
-        self.point_cloud = (np.hstack((self.point_cloud, np.ones((self.point_cloud.shape[0], 1)))) @ self.transformation_matrix.T)[:,:3]
-        self.intensity_cloud = (np.hstack((self.intensity_cloud, np.ones((self.intensity_cloud.shape[0], 1)))) @ self.transformation_matrix.T)[:,:3]
+        self.intensity_cloud = cp.hstack((self.point_cloud[:,:2], intensity_values))
+        self.point_cloud = (cp.hstack((self.point_cloud, cp.ones((self.point_cloud.shape[0], 1)))) @ self.transformation_matrix.T)[:,:3]
+        self.intensity_cloud = (cp.hstack((self.intensity_cloud, cp.ones((self.intensity_cloud.shape[0], 1)))) @ self.transformation_matrix.T)[:,:3]
 
-        self.translated_cloud_limits = [np.nanmax(self.point_cloud[:,0]),np.nanmin(self.point_cloud[:,0]), len(np.unique(self.point_cloud[:,0])),
-                                      np.nanmax(self.point_cloud[:,1]),np.nanmin(self.point_cloud[:,1]), len(np.unique(self.point_cloud[:,1])),
-                                      np.nanmax(self.point_cloud[:,2]),np.nanmin(self.point_cloud[:,2]), len(self.point_cloud[:,2])]
+        self.point_cloud = cp.asnumpy(self.point_cloud)
+        self.intensity_cloud = cp.asnumpy(self.intensity_cloud)
     
+    #calls multiple helper functions to load/interpolate data and then builds an array for the point cloud and intensity cloud
+    #it also creates a dictionary for the x and y values to their index in the point cloud and intensity cloud arrays for the index of each x and y value
+    #performs upsampling
     def _build_processor(self):
         self._find_files()
         self._validate_files()
@@ -212,8 +229,8 @@ class lidar_processor:
         self.point_cloud[:,1] -= self.y_shift
         self.intensity_cloud[:,1] -= self.y_shift
 
-        min_intensity = 0
-        min_z = 250
+        min_intensity = 0 # these values could be changed to be more accurate or to be the actual min and max, but since missing data is an artifact of edges it has very little impact on performace
+        min_z = 250 # for the same reasong as above the values should not be interpolated with surrounding data. 
         
         x_values = np.unique(self.point_cloud[:,0])
         y_values = np.unique(self.point_cloud[:,1]) 
@@ -221,11 +238,13 @@ class lidar_processor:
         x_range = len(x_values)
 
         if self.upsample_ratio > 1:
+            # the known indices are made in relation to the upsample ratio, for example a higher upsample ratio creates smaller index steps
+            # if the there are smaller index steps than there will larger gaps between known indices, which gives more space in the array for interpolation
             index_step = (np.nanmedian(np.diff(x_values))) / self.upsample_ratio 
             index_steps = np.arange(int(round(np.nanmin(x_values)))/index_step - 1,int(round((np.nanmax(x_values))/index_step)+1)) * index_step
-            x_range = len(index_steps)
-            known_indices = np.unique([np.argmin(np.abs(index_steps - x)) for x in x_values])
-            unique_indices, unique_idx = np.unique(known_indices, return_index=True)
+            x_range = len(index_steps) 
+            known_indices = np.unique([np.argmin(np.abs(index_steps - x)) for x in x_values]) 
+            unique_indices, unique_idx = np.unique(known_indices, return_index=True) 
             known_indices = unique_indices
             known_x_values = x_values[unique_idx]
             all_indices = np.arange(x_range)
@@ -241,6 +260,8 @@ class lidar_processor:
         point_dictionary = {(row[0],row[1]): (index, row[2]) for index,row in enumerate(self.point_cloud)}
         intensity_dictionary = {(row[0],row[1]): (index, row[2]) for index,row in enumerate(self.intensity_cloud)}
 
+        #the dictionaries above are used throughout the class and in order to build the array (this could very likely be done in a more efficient way, especially once interpolation is no longer and banding is not an issue)
+        #(the ljx processor doesnt need to do any of this in order to build this array, since the data is more ideal)
         for x in range (x_range):
             for y in range (len(y_values)):
                 x_val = x_values[x]
@@ -258,13 +279,13 @@ class lidar_processor:
                 else:
                     intensity_array[y,x] = min_intensity
 
-        if self.upsample_ratio > 1:
+        if self.upsample_ratio > 1: # interpolates x values 
             for y in range(len(y_values)):
 
                 interpolated_z_values= []
                 interpolated_i_values = []
 
-                for dy in [-4,-3,-2,-1,0,1,2,3,4]:
+                for dy in [-4,-3,-2,-1,0,1,2,3,4]: # the range of y values used to interpolate the z values, this could be changed to be more or less sensitive to noise, and should be changed with different upsample ratios (possibly I havent tested this much at all, this range just seems to work well)
                     y_dy = y + dy
                     if (y_dy >= 0) & (y_dy < len(y_values)):
                         known_z = point_array[y_dy,known_indices]
@@ -289,10 +310,12 @@ class lidar_processor:
         self.i_to_y_list = y_values
         self.y_pixel_size = np.nanmedian(np.diff(y_values))
         self.x_pixel_size = np.nanmedian(np.diff(x_values))
-    
-    def _create_PCA_mask(self, x_window = 9, y_window = 2, batch_size = 100, **kwargs):
 
-        y_window = int(cp.round(0.75/self.y_pixel_size))
+
+    # sets self.PCA_mask to a binary mask based off of the second eigenvalue of the PCA of the point cloud
+    def _create_PCA_mask(self, batch_size = 100, **kwargs):
+
+        y_window = int(cp.round(0.75/self.y_pixel_size)) #this ratio seems to work well for different upsample ratios, but it should maybe be revisited for different lidar data densities. 
         x_window = int(cp.round(1.5/self.x_pixel_size))
 
         for key, value in kwargs.items():
@@ -317,7 +340,7 @@ class lidar_processor:
         eigvals = cp.zeros_like(pc) 
         pc = cp.pad(pc, ((y_window,y_window), (x_window,x_window)), mode='edge')
 
-        for x in range(x_window, pc.shape[1] - x_window, batch_size):
+        for x in range(x_window, pc.shape[1] - x_window, batch_size): # calculate the PCA mask in batches to avoid memory issues
             for y in range(y_window, pc.shape[0] - y_window, batch_size):
                 batch = pc[y - y_window:y + batch_size + y_window, x - x_window:x + batch_size + x_window]
 
@@ -351,7 +374,7 @@ class lidar_processor:
         
         cp.get_default_memory_pool().free_all_blocks()
 
-        queue = deque(zip(strong_y, strong_x))
+        queue = deque(zip(strong_y, strong_x)) # perform hysterisis to connect strong and weak PCA values
         while queue:
             y, x = queue.popleft() 
             return_array[y, x] = 1
@@ -365,6 +388,8 @@ class lidar_processor:
 
         self.PCA_mask = return_array
 
+
+    #sets self.gradient to the result of a combination of convolutions of the point cloud and intensity cloud with sobel filters
     def _get_gradient(self):
         array_i = cp.array(np.log(np.abs(self.intensity_cloud)), dtype=cp.float32)
         array_z = cp.array(self.point_cloud, dtype=cp.float32)
@@ -394,7 +419,7 @@ class lidar_processor:
         y_grad_z = cp.abs(cpconvolve(magnitude_z, sobel_x))
         magnitude_z = cp.sqrt(x_grad_z**2 + y_grad_z**2)
 
-        magnitude = cp.sqrt(magnitude_i * magnitude_z)
+        magnitude = cp.sqrt(magnitude_i * magnitude_z) # this helps to increase value of edges that are seen in both the intensity and point cloud convolutions, which helps enhance edges without increasing noise too much
 
         y_bottom = np.argmin(np.abs(y_values - self.window_size))
         y_top = np.argmin(np.abs(y_values + self.window_size))
@@ -403,7 +428,10 @@ class lidar_processor:
         magnitude[y_bottom:, :] = 0
 
         self.gradient = cp.asnumpy(magnitude)
+
+    #ljx and lidar processor are the same after this point
     
+    #uses the edge array and PCA mask to create a binary mask of the edges in the point cloud
     def _create_edge_array(self,  **kwargs):
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
@@ -421,7 +449,7 @@ class lidar_processor:
 
         masked_gradient = self.gradient * self.PCA_mask 
         
-        strong_y, strong_x = np.where(masked_gradient >= self.strong_edge_threshold)
+        strong_y, strong_x = np.where(masked_gradient >= self.strong_edge_threshold) #makes sure strong edges can only be in the PCA mask area, helps to reduce the noise of edges that are just from intensity
         weak_edges = ((self.gradient >= self.weak_edge_threshold) & (masked_gradient < self.strong_edge_threshold)).astype(np.uint8) 
 
         queue = deque(zip(strong_y, strong_x))
@@ -440,12 +468,14 @@ class lidar_processor:
         y_bottom = np.argmin(np.abs(y_values + self.window_size))
         
 
-        result_array = cv2.morphologyEx(result_array, cv2.MORPH_CLOSE, kernel)
-        result_array[y_top, :] = 1
+        result_array = cv2.morphologyEx(result_array, cv2.MORPH_CLOSE, kernel) # "opens and closes" the edges to help remove noise and fill in gaps in the edges, this could be enhanced to create much thinner edges
+        result_array[y_top, :] = 1 #adds a border to the edges so that every sections y range does not exeed window_size, this makes sure that moment space stays properly scaled. 
         result_array[y_bottom, :] = 1
 
-        self.edge_array = np.where(result_array ==  1, 1 , np.nan)
+        self.edge_array = np.where(result_array ==  1, 1 , np.nan) 
 
+
+    #given both the height distribution and first derivitive distriution this returns the vector of properties of the distribution as well as a boolean value for positive/negative skew to seperate full and empty sections
     def _get_props(self, distribution1, distribution2,window_size):
             
             properties = []
@@ -472,7 +502,7 @@ class lidar_processor:
             return_properties.append(mean)
             return_properties.append(max)
             return_properties.append(np.abs(properties[1]))
-            return_properties.append(np.arccos(z)/(np.pi/2))
+            return_properties.append(np.arccos(z)/(np.pi/2)) #azimuthal angle
 
             return return_properties, np.uint8(properties[1] > 0)
         
@@ -480,6 +510,7 @@ class lidar_processor:
                 with open(self.DBSCAN_model_path, 'rb') as f:
                     self.tree, self.labels = pickle.load(f)
 
+    # this funciton uses the DBSCAN to classify full vs half vs empoty vs rubble sections of the point cloud
     def _define_sections(self, **kwargs):
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
@@ -522,12 +553,13 @@ class lidar_processor:
                 cz = convolved_point_cloud[ys_at_x, cx]
                 max_y = self.i_to_y_list[np.max(ys_at_x)]
                 min_y = self.i_to_y_list[np.min(ys_at_x)]
-                window_size = np.abs(max_y-min_y)/2
+                #window_size = np.abs(max_y-min_y)/2 # Scaling the window size based on the y range of the section is likely not accurate, so im nor sure if this should be used or not
+                #since the window size to diameter ratio changes I havent looked much at scaling smaller sections to the moment space correctly, but for now keeping the original window size should be ok
 
         
-                v = self._get_props(z, cz, window_size)
+                v = self._get_props(z, cz, self.window_size)
                 vectors.append(v[0])
-                skew += 1 if v[1] else -1
+                skew += 1 if v[1] else -1 # not sure why i did this with the skew boolean but I dont want to change it right now just in case
 
             if not vectors:
                 continue
@@ -546,6 +578,8 @@ class lidar_processor:
             for cx in center_x_vals:
                 self.labeled_x_values[cx] = closest_label
 
+    # this gives every x value along the xrf path a value for variance the x angle offset and the y angle offset, as well as the label found with define_sections
+    # the x window and y window should maybe be changed in order to better represent the variance that the XRF actually see
     def _classify_rubble(self, x_window= 5, y_window=4, **kwargs):
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
@@ -581,7 +615,7 @@ class lidar_processor:
 
         eigvecs = eigvecs[:, :, 0]
 
-        eigvals = eigvals[:,0]/(eigvals[:,0] + eigvals[:,1]  + eigvals[:,2]) 
+        eigvals = eigvals[:,0]/(eigvals[:,0] + eigvals[:,1]  + eigvals[:,2]) #normalizes the variance along the normal vector with the other two eigenvalues, again maybe should be revisted
         
         x_offset = cp.abs(cp.arctan(eigvecs[:,0]/eigvecs[:,2]))
         y_offset = cp.abs(cp.arctan(eigvecs[:,1]/eigvecs[:,2]))
@@ -592,6 +626,8 @@ class lidar_processor:
  
         self.rubble_classifications = results
    
+    # given the desired size of the window this creates a dictionary of windows with the x start and end values as the key and the values as the properties of the window
+    # the properties are the percentage of the window which is defined as rubble, half, full and empty, as well as the average variance, x angle offset and y angle offset of the window
     def _define_correction_windows(self, **kwargs):
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
@@ -626,6 +662,7 @@ class lidar_processor:
 
         self.correction_windows = windows
 
+    # this function is made to be called outside of the class, it saves the correction windows to a pickle file in the file path given during initialization
     def _save_correction_windows(self, **kwargs):
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
@@ -640,6 +677,7 @@ class lidar_processor:
         with open(file_path, 'wb') as f:
             pickle.dump(self.correction_windows, f)
 
+    #plots a visualization of the correction windows, set plot_point_cloud to true to plot the point cloud instead of the intensity cloud
     def _plot_correction_windows(self, width = 150, height = 7, dpi = 75, plot_point_cloud = False, **kwargs):
         
         for key, value in kwargs.items():
@@ -678,7 +716,7 @@ class lidar_processor:
             display = self.intensity_cloud
         ax.imshow(cp.flipud(display), cmap=self.colourmap, interpolation='nearest', alpha=1, aspect= 'auto')
 
-        for (x_start, x_end), values in self.correction_windows.items():
+        for (x_start, x_end), values in self.correction_windows.items(): # magic numbers for the bar heights and widths, could maybe be changed to be a ratio of the set height value 
             half_perc, empty_perc, full_perc, rubble_perc = values[:4]
 
             ratios = np.array([half_perc, empty_perc, full_perc, rubble_perc])
@@ -731,7 +769,7 @@ class lidar_processor:
         ax.set_ylabel("Y index",fontsize = 20)
         ax.set_title(self.name, fontsize=35)
         plt.show()
-    
+
     def _plot_edges(self,width = 150, height = 7, dpi = 75, **kwargs):
 
         for key, value in kwargs.items():
@@ -752,8 +790,6 @@ class lidar_processor:
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
                 setattr(self, key, value)
-
-
 
         self._create_PCA_mask()
 
@@ -811,6 +847,7 @@ class lidar_processor:
         ax.set_title(self.name)
         plt.show()
 
+    #opens the point cloud or intensity cloud in open3d
     def _view_point_cloud(self, intensity_cloud = False):
 
         x = (list)(self.i_to_x_list) * len(self.i_to_y_list)
@@ -847,6 +884,7 @@ class lidar_processor:
 
         plt.show()
 
+    #returns the point cloud as a numpy array with the x,y,z coordinates of each point in the point cloud (this should be the same data format you get when reading the bpc file)
     def _get_data_cube(self):
 
         x = (list)(self.i_to_x_list) * len(self.i_to_y_list)
@@ -854,7 +892,9 @@ class lidar_processor:
         z = self.point_cloud.flatten()
 
         return np.column_stack((x, y, z))
+    
 
+    #saves the point cloud to a las file, this lets you view the point cloud in cloud compare
     def _save_to_las(self):
 
         x = (list)(self.i_to_x_list) * len(self.i_to_y_list)
@@ -872,6 +912,8 @@ class lidar_processor:
 
         las.write(file_path)
 
+        
+    #print either the translated or original limits of the point cloud)
     def _print_scan_limits(self, translated = True):
         if translated:
             data = self.original_cloud_limits
@@ -891,6 +933,8 @@ class lidar_processor:
         print(f" z value range: {data[6]}mm to {data[7]}mm, total number of points: {data[8]}")
         print(f"pixel size: {self.x_pixel_size}mm in the x direction, {self.y_pixel_size}mm in the y direction")
 
+
+    #returns a list of vectors that are the properties of every profile distribution, useful if you want to visualize the moment space of the point cloud and make sure the window size is correct
     def _get_moment_space(self, **kwargs):
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
@@ -924,6 +968,9 @@ class lidar_processor:
         return vectors
 
 class ljx_processor:
+
+    # almost the same as lidar processor, but with changes made to work with bpcs made from the csv exported by the ljx software
+
     def __init__(self, file_path, DBSCAN_model_path = None, window_size = 10, y_shift = 0, name=None,  
                 strong_PCA_threshold = 0.15, weak_PCA_threshold = 0.025, weak_edge_threshold = 0.1, strong_edge_threshold = 0.75, 
                 colourmap = 'binary_r', x_stop = 550 , box_length = 1500, xrf_window_size = 10, noise_threshold = 0.1):
@@ -972,6 +1019,7 @@ class ljx_processor:
         self.point_path = None
         self.intensity_path = None
     
+    # no longer need dbg files for interpolation
     def _find_files(self):
         self.component_parameters_path = None
         self.lidar2xrf_path = None
@@ -1011,7 +1059,6 @@ class ljx_processor:
             print (f"   Missing: {', '.join(non_essential_mising_files)}, contents will be assumed")
     
     def _load_component_parameters(self):
-        self.y_offset = 0
         if self.component_parameters_path is not None:
             with open(self.component_parameters_path) as file:
                 lines = file.readlines()
@@ -1020,9 +1067,6 @@ class ljx_processor:
                         self.x_start = float(line.split(":")[1].strip())
                     if "XRAY_DPP[Acquisition]#0.X.Stop:" in line:
                         self.x_stop = float(line.split(":")[1].strip())
-                    if "XRAY_DPP[Acquisition]#0.Y.Start:" in line:
-                        self.y_offset = float(line.split(":")[1].strip())
-    
     def _load_lidar_data(self):
         if self.lidar2xrf_path is None:
             self.transformation_matrix = cp.array([[1,0,0,192],
@@ -1076,18 +1120,18 @@ class ljx_processor:
         height = len(y_values)
         width = len(x_values)
 
-        point_array = self.point_cloud[:,2].reshape(width,height).T[::-1]
+        point_array = self.point_cloud[:,2].reshape(width,height).T[::-1] # this only works if the bpc points are written in the correct order, which is the order of the csv that keyence outputs(assuming the table moves in the right direction)
         intensity_array = self.intensity_cloud.reshape(width,height).T[::-1]
 
-        
-            
         self.y_seed_point = np.argmin(np.abs(y_values.get()))
         self.point_cloud = cp.asnumpy(point_array)
         self.intensity_cloud = cp.asnumpy(intensity_array)
         self.i_to_x_list = x_values.get()
         self.i_to_y_list = y_values.get()
     
-    def _create_PCA_mask(self,y_window = 3, x_window = 9, batch_size = 100, **kwargs):
+
+    # the PCA mask used here is different, using 2 eigenvalues seemed to work better for this data, but not much time was spent on this
+    def _create_PCA_mask(self, batch_size = 100, **kwargs):
 
         y_window = int(cp.round(0.75/self.y_pixel_size))
         x_window = int(cp.round(1.5/self.x_pixel_size))
@@ -1162,6 +1206,7 @@ class ljx_processor:
 
         self.PCA_mask = return_array
 
+    # no longer needs to use intensity values, again could very likely be improved, since not much time was spent devloping methodology for this resolution
     def _get_gradient(self):
 
         array_z = cp.array(self.point_cloud, dtype=cp.float32)
@@ -1212,6 +1257,8 @@ class ljx_processor:
         magnitude[y_bottom:, :] = 0
 
         self.gradient = cp.asnumpy(magnitude)
+
+    #everything after this is the same as the lidar processor 
     
     def _create_edge_array(self,  **kwargs):
         for key, value in kwargs.items():
@@ -1329,12 +1376,8 @@ class ljx_processor:
 
                 z = self.point_cloud[ys_at_x, cx]
                 cz = convolved_point_cloud[ys_at_x, cx]
-                max_y = self.i_to_y_list[np.max(ys_at_x)]
-                min_y = self.i_to_y_list[np.min(ys_at_x)]
-                window_size = np.abs(max_y-min_y)/2
 
-        
-                v = self._get_props(z, cz, window_size)
+                v = self._get_props(z, cz, self.window_size)
                 vectors.append(v[0])
                 skew += 1 if v[1] else -1
 
